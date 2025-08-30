@@ -1,0 +1,10 @@
+{
+    // interpreter Pythona - wskazuje na środowisko venv
+    "python.defaultInterpreterPath": "venv/bin/python",
+    // automatyczne formatowanie po zapisaniu pliku
+    "editor.formatOnSave": true,
+    // analiza typów przez Pylance
+    "python.analysis.typeCheckingMode": "basic",
+    // wybrany językowy backend
+    "python.languageServer": "Pylance"
+}
