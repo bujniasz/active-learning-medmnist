@@ -19,10 +19,10 @@ Uses:
 
 Example usage:
     # Train a model on the dermamnist dataset:
-    python train_baseline.py -d data/dermamnist -m models/dermamnist_model.pth
+    python train_baseline.py -d data/dermamnist -m models/dermamnist_model.pth -r results/dermamnist_results.csv
 
     # Evaluate a previously saved model:
-    python train_baseline.py --eval-only -m models/dermamnist_model.pth
+    python train_baseline.py --eval-only -m models/dermamnist_model.pth -r results/dermamnist_results.csv
 """
 
 # ======= Args to parse =======
@@ -70,6 +70,7 @@ if args.eval_only:
 
     DATA_DIR = checkpoint['data_dir']
 
+    # This call now also handles binary label mapping and filtering
     _, val_loader, test_loader = get_dataloaders(DATA_DIR, batch_size=BATCH_SIZE)
 
     model = get_model(num_classes, in_channels)
@@ -81,6 +82,7 @@ else:
     print("🚀 Mode: training + evaluation")
     DATA_DIR = args.data_dir
 
+    # This call now also handles binary label mapping and filtering
     train_loader, val_loader, test_loader = get_dataloaders(DATA_DIR, batch_size=BATCH_SIZE)
 
     sample_x, _ = next(iter(train_loader))
