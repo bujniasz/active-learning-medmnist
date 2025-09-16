@@ -5,6 +5,7 @@ from torchvision.models import resnet18, ResNet18_Weights
 from load_data import get_dataloaders
 from metrics import get_predictions, evaluate_predictions, save_metrics_to_csv
 import argparse
+import os
 
 """
 train_baseline.py
@@ -30,7 +31,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
 parser.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
 parser.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
-parser.add_argument("-r", "--results-path", type=str, required=True, help="Path to the .csv file with evaluation results")
+parser.add_argument("-r", "--results-path", type=str, default=None, help="Path to the .csv file with evaluation results")
 args = parser.parse_args()
 
 # ======= Parameters =======
@@ -38,6 +39,12 @@ BEST_MODEL_PATH = args.model_path
 BATCH_SIZE = 64
 EPOCHS = 3
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if args.results_path is not None:
+    RESULTS_PATH = args.results_path
+else:
+    model_filename = os.path.basename(args.model_path)
+    model_name = os.path.splitext(model_filename)[0]
+    RESULTS_PATH = os.path.join("results", model_name + ".csv")
 
 # ======= Model builder =======
 def get_model(num_classes, in_channels):
@@ -146,4 +153,4 @@ print(f"📈 Validation check: val_acc = {val_acc_check:.4f}")
 
 y_true, y_pred = get_predictions(model, test_loader, DEVICE)
 metrics = evaluate_predictions(y_true, y_pred)
-save_metrics_to_csv(metrics, args.results_path)
+save_metrics_to_csv(metrics, RESULTS_PATH)
