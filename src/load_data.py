@@ -2,6 +2,9 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
+from labels_mapping import map_labels, get_valid_indices
+
+binary_mapping_required = {"bloodmnist", "octmnist", "pathmnist"}
 
 class MedMNISTDataset(Dataset):
     def __init__(self, images, labels, transform=None):
@@ -46,13 +49,24 @@ def load_npz_split(data_dir, split):
 
 def get_dataloaders(data_dir, batch_size=64, num_workers=2):
     """
-    Returns dataloaders for train/val/test sets
+    Returns dataloaders for train/val/test sets.
+    it applies binary label mapping and filtering (if needed).
     """
     splits = ['train', 'val', 'test']
     dataloaders = {}
 
+    dataset_name = os.path.basename(os.path.normpath(data_dir))
+
     for split in splits:
         images, labels = load_npz_split(data_dir, split)
+
+        if dataset_name in binary_mapping_required:
+            valid_indices = get_valid_indices(dataset_name, labels) # it is for filtering purposes - nothing happens if that's not a pathmnist
+            images = images[valid_indices]
+            labels = labels[valid_indices]
+
+            labels = map_labels(dataset_name, labels)
+
         dataset = MedMNISTDataset(images, labels)
         dataloaders[split] = DataLoader(
             dataset,
@@ -65,7 +79,7 @@ def get_dataloaders(data_dir, batch_size=64, num_workers=2):
 
 # TEST 
 # if __name__ == "__main__":
-#     data_dir = "data/octmnist"
+#     data_dir = "data/pneumoniamnist"
 
 #     train_loader, val_loader, test_loader = get_dataloaders(data_dir, batch_size=8)
 
@@ -74,5 +88,5 @@ def get_dataloaders(data_dir, batch_size=64, num_workers=2):
 #         print("y shape:", y.shape)  # expected: [8]
 #         print("x dtype:", x.dtype)  # expected: torch.float32
 #         print("y dtype:", y.dtype)  # expected: torch.int64
-#         print("y batch:", y.tolist())  # np. [0, 3, 1, 1, 2, 0, 3, 3]
+#         print("y batch:", y.tolist())  # np. [0, 3, 1, 1, 2, 0, 3, 3] NOW [0, 1, 0 ....]
 #         break
