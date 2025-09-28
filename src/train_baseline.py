@@ -20,10 +20,9 @@ Uses:
 
 Example usage:
     # Train a model on the dermamnist dataset:
-    python train_baseline.py -d data/dermamnist -m models/dermamnist_model.pth -r results/dermamnist_results.csv
-
+    python train_baseline.py -d data/dermamnist -m models/dermamnist_model.pth
     # Evaluate a previously saved model:
-    python train_baseline.py --eval-only -m models/dermamnist_model.pth -r results/dermamnist_results.csv
+    python train_baseline.py --eval-only -m models/dermamnist_model.pth
 """
 
 # ======= Args to parse =======
