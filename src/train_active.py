@@ -12,6 +12,8 @@ from torch import nn, optim
 from torchvision.models import resnet18, ResNet18_Weights
 from torch.utils.data import DataLoader
 
+from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_precision_score
+
 from libact.base.dataset import Dataset
 from libact.query_strategies import UncertaintySampling
 from libact.labelers import IdealLabeler
@@ -113,23 +115,11 @@ def parse_args():
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
+    p.add_argument("--select-metric", type=str, default="acc", choices=["acc", "f1", "auc", "ap"])
+    p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
-
-def prepare_bloodmnist_numpy(data_dir: str) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Loads train split from .npz and applies the same rules as get_dataloaders():
-    - filtering (for pathmnist) by get_valid_indices()
-    - binary label mapping by map_labels()
-    Returns: X (e.g. uint8 or float), y (int64) with shapes (N, H, W[, C?]) and (N,)
-    """
-    dataset_name = os.path.basename(os.path.normpath(data_dir))
-    X, y = load_npz_split(data_dir, "train")             # (N, 28, 28[, 3]), (N[,1])
-    valid_idx = get_valid_indices(dataset_name, y)        # no-op dla bloodmnist
-    X, y = X[valid_idx], y[valid_idx]
-    y_bin = map_labels(dataset_name, y).astype(np.int64)  # 0/1 zgodnie z naszym mappingiem
-    return X, y_bin
 
 # === AL start === 
 def init_libact(X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 42):
@@ -149,33 +139,84 @@ def init_libact(X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapp
     qs = UncertaintySampling(active_ds, method=method, model=wrapper)
     return active_ds, oracle, qs, init_idx
 
+# === Data preparation - sth like get_dataloaders.py === 
+def prepare_numpy(data_dir: str, split: str = "train", to_nchw: bool = True) -> tuple[np.ndarray, np.ndarray, int]:
+    """
+    Loading and binary mapping of labels for split: “train”/'val'/“test”.
+    - filters with get_valid_indices()
+    - maps labels with map_labels() -> 0/1
+    - optionally transposes to NCHW (PyTorch): (N,H,W,C)->(N,C,H,W)
+    Returns: X, y_bin, in_channels
+    """
+    dataset_name = os.path.basename(os.path.normpath(data_dir))
+    X, y = load_npz_split(data_dir, split)
+    idx = get_valid_indices(dataset_name, y)
+    X, y = X[idx], y[idx]
+    y_bin = map_labels(dataset_name, y).astype(np.int64)
+    if to_nchw and X.ndim == 4 and X.shape[-1] in (1, 3):
+        X = np.transpose(X, (0, 3, 1, 2))
+    in_channels = 1 if X.ndim == 3 else (X.shape[1] if X.ndim == 4 else 1)
+    return X, y_bin, in_channels
+
+# === Training + validation loop === 
+def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
+                        budget: int, batch: int, model_path: str,
+                        select_metric: str = "acc") -> str:
+    asked = 0; cycle = 0; best_sel = float("-inf")
+    Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
+    while asked < budget:
+        k = min(batch, budget - asked)
+        for _ in range(k):
+            ask_id = qs.make_query()
+            y_new = oracle.label(active_ds.data[ask_id][0])
+            active_ds.update(ask_id, y_new)
+        wrapper.train(active_ds)
+        cycle += 1; asked += k
+        y_pred = wrapper.predict(X_val)
+        acc = accuracy_score(y_val, y_pred)
+        f1 = f1_score(y_val, y_pred)
+        proba = wrapper.predict_proba(X_val)[:, 1]
+        auc = roc_auc_score(y_val, proba)
+        ap = average_precision_score(y_val, proba)
+        labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
+        print(f"[cycle {cycle}] labeled={labeled_cnt} acc={acc:.4f} f1={f1:.4f} auc={auc:.4f} ap={ap:.4f}")
+        sel = {"acc": acc, "f1": f1, "auc": auc, "ap": ap}[select_metric]
+        if sel > best_sel:
+            best_sel = sel
+            torch.save(wrapper.model.state_dict(), model_path)
+    return model_path
 
 # === TEST BELOW ===
-# python3 src/train_active.py --data-dir data/bloodmnist --init-size 100 --epochs-per-cycle 1 --method lc
+# python3 src/train_active.py --data-dir data/bloodmnist --init-size 100 --budget 20 --batch 5 --epochs-per-cycle 1 --method lc -m models/ac-test-0510pt2.pth
 if __name__ == "__main__":
     args = parse_args()
     set_seed(args.seed)
 
-    X, y = prepare_bloodmnist_numpy(args.data_dir)
-    if X.ndim == 4 and X.shape[-1] in (1, 3):
-        X = np.transpose(X, (0, 3, 1, 2))
-    in_channels = 1 if X.ndim == 3 else X.shape[1]
+    X, y, in_channels = prepare_numpy(args.data_dir, split="train", to_nchw=True)
 
     wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=2, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle)
-    wrapper.epochs_per_cycle = args.epochs_per_cycle
 
     active_ds, oracle, qs, init_idx = init_libact(X, y, args.init_size, args.method, wrapper, seed=args.seed)
     print(f"Start: labeled={len(init_idx)}, unlabeled={len(y)-len(init_idx)}")
 
     wrapper.train(active_ds)
-    for t in range(2):
-        ask_id = qs.make_query()
-        x_feat = active_ds.data[ask_id][0]
-        y_new = oracle.label(x_feat)
-        active_ds.update(ask_id, y_new)
-        wrapper.train(active_ds)
-        labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
-        print(f"Cycle {t+1}: labeled={labeled_cnt}")
 
-    probs = wrapper.predict_proba(X[:8])
-    print("probs shape:", probs.shape, "row sums:", probs.sum(axis=1))
+    # Validation
+    X_val, y_val, _ = prepare_numpy(args.data_dir, split="val", to_nchw=True)
+    best_ckpt = run_budget_loop_val(active_ds, oracle, qs, wrapper,
+                                    X_val, y_val,
+                                    budget=args.budget, batch=args.batch,
+                                    model_path=args.model_path,
+                                    select_metric=args.select_metric)
+
+    # Test
+    X_test, y_test, _ = prepare_numpy(args.data_dir, split="test", to_nchw=True)
+    wrapper.model.load_state_dict(torch.load(best_ckpt, map_location=DEVICE))
+    y_pred = wrapper.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    proba = wrapper.predict_proba(X_test)[:, 1]
+    print(proba)
+    auc = roc_auc_score(y_test, proba)
+    ap = average_precision_score(y_test, proba)
+    print(f"[FINAL TEST] acc={acc:.4f} f1={f1:.4f} auc={auc:.4f} ap={ap:.4f} (ckpt: {best_ckpt})")
