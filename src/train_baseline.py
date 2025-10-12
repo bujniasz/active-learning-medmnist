@@ -6,6 +6,7 @@ from load_data import get_dataloaders
 from metrics import get_predictions, evaluate_predictions, save_metrics_to_csv
 import argparse
 import os
+import torch.nn.functional as F
 
 """
 train_baseline.py
@@ -30,7 +31,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
 parser.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
 parser.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
-parser.add_argument("-r", "--results-path", type=str, default=None, help="Path to the .csv file with evaluation results")
+parser.add_argument("-r", "--results-path", type=str, default=None, 
+                    help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
 args = parser.parse_args()
 
 # ======= Parameters =======
@@ -66,90 +68,102 @@ def evaluate(model, dataloader):
             correct += (predicted == targets).sum().item()
     return correct / total
 
-# ======= Evaluation mode (without training) =======
-if args.eval_only:
-    print("🔍 Mode: evaluation only")
 
-    checkpoint = torch.load(BEST_MODEL_PATH)
-    num_classes = checkpoint['num_classes']
-    in_channels = checkpoint['in_channels']
+if __name__ == "__main__":
+    # ======= Evaluation mode (without training) =======
+    if args.eval_only:
+        print("🔍 Mode: evaluation only")
 
-    DATA_DIR = checkpoint['data_dir']
+        checkpoint = torch.load(BEST_MODEL_PATH)
+        num_classes = checkpoint['num_classes']
+        in_channels = checkpoint['in_channels']
 
-    # This call now also handles binary label mapping and filtering
-    _, val_loader, test_loader = get_dataloaders(DATA_DIR, batch_size=BATCH_SIZE)
+        DATA_DIR = checkpoint['data_dir']
 
-    model = get_model(num_classes, in_channels)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.to(DEVICE)
+        # This call now also handles binary label mapping and filtering
+        _, val_loader, test_loader = get_dataloaders(DATA_DIR, batch_size=BATCH_SIZE)
 
-# ======= Full training mode =======
-else:
-    print("🚀 Mode: training + evaluation")
-    DATA_DIR = args.data_dir
+        model = get_model(num_classes, in_channels)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.to(DEVICE)
 
-    # This call now also handles binary label mapping and filtering
-    train_loader, val_loader, test_loader = get_dataloaders(DATA_DIR, batch_size=BATCH_SIZE)
+    # ======= Full training mode =======
+    else:
+        print("🚀 Mode: training + evaluation")
+        DATA_DIR = args.data_dir
 
-    sample_x, _ = next(iter(train_loader))
-    in_channels = sample_x.shape[1]
-    num_classes = len(torch.unique(torch.cat([y for _, y in train_loader])))
+        # This call now also handles binary label mapping and filtering
+        train_loader, val_loader, test_loader = get_dataloaders(DATA_DIR, batch_size=BATCH_SIZE)
 
-    print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
+        sample_x, _ = next(iter(train_loader))
+        in_channels = sample_x.shape[1]
+        num_classes = len(torch.unique(torch.cat([y for _, y in train_loader])))
 
-    model = get_model(num_classes, in_channels).to(DEVICE)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+        print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
 
-    best_val_acc = 0.0
+        model = get_model(num_classes, in_channels).to(DEVICE)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-    for epoch in range(EPOCHS):
-        model.train()
-        running_loss, total, correct = 0.0, 0, 0
+        best_val_acc = 0.0
 
-        for inputs, targets in train_loader:
-            inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
+        for epoch in range(EPOCHS):
+            model.train()
+            running_loss, total, correct = 0.0, 0, 0
 
-            optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            loss.backward()
-            optimizer.step()
+            for inputs, targets in train_loader:
+                inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
 
-            running_loss += loss.item()
-            _, predicted = torch.max(outputs, 1)
-            total += targets.size(0)
-            correct += (predicted == targets).sum().item()
+                optimizer.zero_grad()
+                outputs = model(inputs)
+                loss = criterion(outputs, targets)
+                loss.backward()
+                optimizer.step()
 
-        train_acc = correct / total
-        val_acc = evaluate(model, val_loader)
+                running_loss += loss.item()
+                _, predicted = torch.max(outputs, 1)
+                total += targets.size(0)
+                correct += (predicted == targets).sum().item()
 
-        print(f"Epoch [{epoch+1}/{EPOCHS}] - Loss: {running_loss:.4f} - Train Acc: {train_acc:.4f} - Val Acc: {val_acc:.4f}")
+            train_acc = correct / total
+            val_acc = evaluate(model, val_loader)
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'in_channels': in_channels,
-                'num_classes': num_classes,
-                'val_acc': val_acc,
-                'data_dir': DATA_DIR
-            }, BEST_MODEL_PATH)
-            print(f"✅ NEW BEST MODEL FOUND (val_acc = {val_acc:.4f})")
+            print(f"Epoch [{epoch+1}/{EPOCHS}] - Loss: {running_loss:.4f} - Train Acc: {train_acc:.4f} - Val Acc: {val_acc:.4f}")
 
-    checkpoint = torch.load(BEST_MODEL_PATH)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.to(DEVICE)
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'in_channels': in_channels,
+                    'num_classes': num_classes,
+                    'val_acc': val_acc,
+                    'data_dir': DATA_DIR
+                }, BEST_MODEL_PATH)
+                print(f"✅ NEW BEST MODEL FOUND (val_acc = {val_acc:.4f})")
 
-# ======= Evaluation on test set + metrics =======
-print(f"📦 MODEL NAME: {BEST_MODEL_PATH}")
+        checkpoint = torch.load(BEST_MODEL_PATH)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.to(DEVICE)
 
-test_acc = evaluate(model, test_loader)
-print(f"\n✅ Test accuracy: {test_acc:.4f}")
+    # ======= Evaluation on test set + metrics =======
+    print(f"📦 MODEL NAME: {BEST_MODEL_PATH}")
 
-val_acc_check = evaluate(model, val_loader)
-print(f"📈 Validation check: val_acc = {val_acc_check:.4f}")
+    test_acc = evaluate(model, test_loader)
+    print(f"\n✅ Test accuracy: {test_acc:.4f}")
 
-y_true, y_pred = get_predictions(model, test_loader, DEVICE)
-metrics = evaluate_predictions(y_true, y_pred)
-save_metrics_to_csv(metrics, RESULTS_PATH)
+    val_acc_check = evaluate(model, val_loader)
+    print(f"📈 Validation check: val_acc = {val_acc_check:.4f}")
+
+    y_true, y_pred = get_predictions(model, test_loader, DEVICE)
+    proba = None
+    if model.fc.out_features == 2: #it makes sense only for binary labels but the mechanism could be better
+        model.eval()
+        y_proba_list = []
+        with torch.no_grad():
+            for inputs, _ in test_loader:
+                inputs = inputs.to(DEVICE)
+                probs = F.softmax(model(inputs), dim=1)[:, 1]
+                y_proba_list.extend(probs.cpu().tolist())
+        proba = y_proba_list
+    metrics = evaluate_predictions(y_true, y_pred, y_proba=proba)
+    save_metrics_to_csv(metrics, RESULTS_PATH)
