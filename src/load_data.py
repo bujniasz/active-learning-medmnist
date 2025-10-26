@@ -1,11 +1,16 @@
+# === IMPORTS ===
+# General
 import os
 import numpy as np
+
+# Torch
 import torch
 from torch.utils.data import Dataset, DataLoader
+
+# Custom
 from labels_mapping import map_labels, get_valid_indices
 
 binary_mapping_required = {"bloodmnist", "octmnist", "pathmnist"}
-
 class MedMNISTDataset(Dataset):
     def __init__(self, images, labels, transform=None):
         self.images = images
@@ -37,7 +42,6 @@ class MedMNISTDataset(Dataset):
 
         return x, y
 
-
 def load_npz_split(data_dir, split):
     """
     Loads images and labels for a given partition (train/val/test)
@@ -46,8 +50,7 @@ def load_npz_split(data_dir, split):
     labels = np.load(os.path.join(data_dir, f"{split}_labels.npy"))
     return images, labels
 
-
-def get_dataloaders(data_dir, batch_size=64, num_workers=2):
+def prepare_split_baseline(data_dir, batch_size=64, num_workers=2):
     """
     Returns dataloaders for train/val/test sets.
     it applies binary label mapping and filtering (if needed).
@@ -76,6 +79,25 @@ def get_dataloaders(data_dir, batch_size=64, num_workers=2):
         )
 
     return dataloaders['train'], dataloaders['val'], dataloaders['test']
+
+def prepare_split_active(data_dir: str, split: str = "train", to_nchw: bool = True):
+    dataset_name = os.path.basename(os.path.normpath(data_dir))
+
+    X, y = load_npz_split(data_dir, split)
+
+    if dataset_name in binary_mapping_required:
+        idx = get_valid_indices(dataset_name, y)
+        X, y = X[idx], y[idx]
+        y = map_labels(dataset_name, y).astype(np.int64)
+    else:
+        y = y.squeeze().astype(np.int64)
+
+    if to_nchw and X.ndim == 4 and X.shape[-1] in (1, 3):
+        X = np.transpose(X, (0, 3, 1, 2))
+
+    in_channels = 1 if X.ndim == 3 else (X.shape[1] if X.ndim == 4 else 1)
+    num_classes = int(np.unique(y).size)
+    return X, y, in_channels, num_classes
 
 # TEST 
 # if __name__ == "__main__":

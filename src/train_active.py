@@ -1,37 +1,31 @@
-# ======= Imports =======
-
+# === IMPORTS ===
+# General
+import os
+import numpy as np
 import argparse
 import random
 from pathlib import Path
-from typing import Optional, Tuple, List
 
-import os
-import numpy as np
+# Torch
 import torch
 from torch import nn, optim
-from torchvision.models import resnet18, ResNet18_Weights
-from torch.utils.data import DataLoader
+from torchvision.models import resnet18, ResNet18_Weights   
 
+# Sklearn
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_precision_score
 
+# Libact
 from libact.base.dataset import Dataset
 from libact.query_strategies import UncertaintySampling
 from libact.labelers import IdealLabeler
 from libact.base.interfaces import ProbabilisticModel
 
-from load_data import get_dataloaders, load_npz_split
-from labels_mapping import map_labels, get_valid_indices
+# Custom
+from load_data import prepare_split_active
 from metrics import get_predictions, evaluate_predictions, save_metrics_to_csv
 
-# === Consts and Seed ===
+# === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def set_seed(seed: int = 42):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
 
 # === Custom wrapper for libact <-> resnet to work ===
 # === https://github.com/ntucllab/libact/blob/master/libact/base/interfaces.py ===
@@ -49,7 +43,7 @@ class TorchModelWrapper(ProbabilisticModel):
         self.epochs_per_cycle = epochs_per_cycle
 
     def predict_proba(self, X: np.ndarray, batch_size: int = 256) -> np.ndarray:
-        import torch.nn.functional as F
+        #import torch.nn.functional as F
         from torch.utils.data import TensorDataset, DataLoader
         self.model.eval()
         if isinstance(X, list):
@@ -61,15 +55,24 @@ class TorchModelWrapper(ProbabilisticModel):
             X_t = X_t.unsqueeze(1)
         ds = TensorDataset(X_t)
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
-        probs = []
-        with torch.no_grad():
-            for (xb,) in dl:
-                xb = xb.to(DEVICE, non_blocking=True)
-                logits = self.model(xb)
-                probs.append(F.softmax(logits, dim=1).cpu().numpy())
-        return np.concatenate(probs, axis=0)
+        all_probs = []
+        with torch.inference_mode():
+            for (inputs,) in dl:
+                inputs = inputs.to(DEVICE)
+                logits = self.model(inputs)
+                probs = torch.softmax(logits, dim=1)
+                all_probs.append(probs.detach().cpu().numpy())
 
-    def train_on_numpy(self, X: np.ndarray, y: np.ndarray, epochs: int = 1, batch_size: int = 64):
+        return np.concatenate(all_probs, axis=0)
+        # probs = []
+        # with torch.no_grad():
+        #     for (xb,) in dl:
+        #         xb = xb.to(DEVICE, non_blocking=True)
+        #         logits = self.model(xb)
+        #         probs.append(F.softmax(logits, dim=1).cpu().numpy())
+        # return np.concatenate(probs, axis=0)
+
+    def train_on_numpy(self, X: np.ndarray, y: np.ndarray, epochs: int = 1, batch_size: int = 64, verbose: bool = False):
         from torch.utils.data import TensorDataset, DataLoader
         self.model.train()
         X_t = torch.from_numpy(X)
@@ -85,20 +88,25 @@ class TorchModelWrapper(ProbabilisticModel):
         eff_bs = min(batch_size, n)
         dl = DataLoader(ds, batch_size=eff_bs, shuffle=True, drop_last=True)
         for _ in range(epochs):
+            total_loss = 0.0
             for xb, yb in dl:
                 xb, yb = xb.to(DEVICE, non_blocking=True), yb.to(DEVICE, non_blocking=True)
                 self.optimizer.zero_grad()
                 loss = self.loss_fn(self.model(xb), yb)
                 loss.backward()
                 self.optimizer.step()
+                total_loss += loss.item()
+            avg_loss = total_loss / len(dl)
+            if verbose:
+                print(f"   🔹 Training loss: {avg_loss:.4f}")
 
-    def train(self, dataset):
+    def train(self, dataset, verbose: bool = False):
         X_l, y_l = dataset.get_labeled_entries()
         if len(y_l) == 0:
             return
         X_arr = np.stack(X_l)
         y_arr = np.asarray(y_l, dtype=np.int64)
-        self.train_on_numpy(X_arr, y_arr, epochs=getattr(self, "epochs_per_cycle", 1))
+        self.train_on_numpy(X_arr, y_arr, epochs=getattr(self, "epochs_per_cycle", 1), verbose=verbose)
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return self.predict_proba(X).argmax(axis=1)
@@ -112,15 +120,24 @@ class TorchModelWrapper(ProbabilisticModel):
         y_pred = self.predict(X_arr)
         return float((y_pred == y_arr).mean())
 
-# === Args to parse (baseline.py should also be extended like that) ===
+# === SEED ===
+def set_seed(seed: int = 42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+# === ARGUMENTS ===
 def parse_args():
     p = argparse.ArgumentParser(description="Active Learning on bloodmnist with libact")
+    p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
     p.add_argument("-r", "--results-path", type=str, default=None,
                help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
-    p.add_argument("--init-size", type=int, default=100)
-    p.add_argument("--budget", type=int, default=1000)
+    p.add_argument("--init-size", type=int, default=500)
+    p.add_argument("--budget", type=int, default=30)
     p.add_argument("--batch", type=int, default=10, help="queries per AL cycle")
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
@@ -129,8 +146,7 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
-
-# === AL start === 
+# === AL START === 
 def init_libact(X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 42):
     rng = np.random.RandomState(seed)
     y = np.asarray(y)
@@ -149,33 +165,34 @@ def init_libact(X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapp
     return active_ds, oracle, qs, init_idx
 
 # === Data preparation - sth like get_dataloaders === 
-def prepare_numpy(data_dir: str, split: str = "train", to_nchw: bool = True) -> tuple[np.ndarray, np.ndarray, int]:
-    """
-    Loading and binary mapping of labels for split: “train”/'val'/“test”.
-    - filters with get_valid_indices()
-    - maps labels with map_labels() -> 0/1
-    - optionally transposes to NCHW (PyTorch): (N,H,W,C)->(N,C,H,W)
-    Returns: X, y_bin, in_channels
-    """
-    dataset_name = os.path.basename(os.path.normpath(data_dir))
-    X, y = load_npz_split(data_dir, split)
-    binary_mapping_required = {"bloodmnist", "octmnist", "pathmnist"}
-    if dataset_name in binary_mapping_required:
-        idx = get_valid_indices(dataset_name, y)
-        X, y = X[idx], y[idx]
-        y_bin = map_labels(dataset_name, y).astype(np.int64)
-    else:
-        y_bin = y.squeeze().astype(np.int64)
-    if to_nchw and X.ndim == 4 and X.shape[-1] in (1, 3):
-        X = np.transpose(X, (0, 3, 1, 2))
-    in_channels = 1 if X.ndim == 3 else (X.shape[1] if X.ndim == 4 else 1)
-    return X, y_bin, in_channels
+# def prepare_numpy(data_dir: str, split: str = "train", to_nchw: bool = True) -> tuple[np.ndarray, np.ndarray, int]:
+#     """
+#     Loading and binary mapping of labels for split: “train”/'val'/“test”.
+#     - filters with get_valid_indices()
+#     - maps labels with map_labels() -> 0/1
+#     - optionally transposes to NCHW (PyTorch): (N,H,W,C)->(N,C,H,W)
+#     Returns: X, y_bin, in_channels
+#     """
+#     dataset_name = os.path.basename(os.path.normpath(data_dir))
+#     X, y = load_npz_split(data_dir, split)
+#     binary_mapping_required = {"bloodmnist", "octmnist", "pathmnist"}
+#     if dataset_name in binary_mapping_required:
+#         idx = get_valid_indices(dataset_name, y)
+#         X, y = X[idx], y[idx]
+#         y_bin = map_labels(dataset_name, y).astype(np.int64)
+#     else:
+#         y_bin = y.squeeze().astype(np.int64)
+#     if to_nchw and X.ndim == 4 and X.shape[-1] in (1, 3):
+#         X = np.transpose(X, (0, 3, 1, 2))
+#     in_channels = 1 if X.ndim == 3 else (X.shape[1] if X.ndim == 4 else 1)
+#     return X, y_bin, in_channels
 
-# === Training + validation loop === 
+# === TRAINING + VALIDATION LOOP === 
 def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                         budget: int, batch: int, model_path: str,
                         select_metric: str = "acc",
                         data_dir: str | None = None) -> str:
+    
     asked = 0; cycle = 0; best_sel = float("-inf")
     Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
     while asked < budget:
@@ -184,20 +201,25 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
             ask_id = qs.make_query()
             y_new = oracle.label(active_ds.data[ask_id][0])
             active_ds.update(ask_id, y_new)
-        wrapper.train(active_ds)
+        wrapper.train(active_ds, verbose=True)
         cycle += 1; asked += k
-        y_pred = wrapper.predict(X_val)
+        #y_pred_old = wrapper.predict(X_val)
+        _, y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE)
         acc = accuracy_score(y_val, y_pred)
-        f1 = f1_score(y_val, y_pred)
-        proba = wrapper.predict_proba(X_val)[:, 1]
-        auc = roc_auc_score(y_val, proba)
-        ap = average_precision_score(y_val, proba)
+        f1 = f1_score(y_val, y_pred, average='macro')
+        proba = None
+        auc = float("nan")
+        ap = float("nan")
+        if wrapper.num_classes == 2:
+            proba = wrapper.predict_proba(X_val)[:, 1]
+            auc = roc_auc_score(y_val, proba)
+            ap = average_precision_score(y_val, proba)
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
-        print(f"[cycle {cycle}] labeled={labeled_cnt} val_acc={acc:.4f} val_f1={f1:.4f} val_auc={auc:.4f} val_ap={ap:.4f}")
+        print(f"[cycle {cycle}/{int(args.budget / args.batch)}] labeled={labeled_cnt} val_acc={acc:.4f} val_f1={f1:.4f} val_auc={auc:.4f} val_ap={ap:.4f}")
         sel = {"acc": acc, "f1": f1, "auc": auc, "ap": ap}[select_metric]
         if sel > best_sel:
             best_sel = sel
-            ckpt = {
+            torch.save({
                 "model_state_dict": wrapper.model.state_dict(),
                 "in_channels": wrapper.in_channels,
                 "num_classes": wrapper.num_classes,
@@ -210,69 +232,105 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                 "best_metric": float(sel),
                 "best_cycle": int(cycle),
                 "labeled_count": int(labeled_cnt),
-            }
-            torch.save(ckpt, model_path)
+            }, model_path)
+            print(f"✅ NEW BEST (by {args.select_metric}) → {best_sel:.4f}")
     return model_path
 
-# === TEST BELOW ===
-# python3 src/train_active.py --data-dir data/bloodmnist --init-size 100 --budget 20 --batch 5 --epochs-per-cycle 1 --method lc -m models/ac-test-0510pt2.pth
+# === MAIN LOOP ===
+# python3 src/train_active.py --data-dir data/bloodmnist -m models/ac-test-0510pt2.pth
 if __name__ == "__main__":
     args = parse_args()
+
     set_seed(args.seed)
+    
     if args.results_path is not None:
         RESULTS_PATH = args.results_path
     else:
         model_filename = os.path.basename(args.model_path)
         model_name = os.path.splitext(model_filename)[0]
         RESULTS_PATH = os.path.join("results", model_name + ".csv")
-
-    X, y, in_channels = prepare_numpy(args.data_dir, split="train", to_nchw=True)
-    num_classes = len(torch.unique(torch.tensor(y)))
-    print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
-
-    wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle)
-
-    active_ds, oracle, qs, init_idx = init_libact(X, y, args.init_size, args.method, wrapper, seed=args.seed)
-    print(f"Start: labeled={len(init_idx)}, unlabeled={len(y)-len(init_idx)}")
-
-    wrapper.train(active_ds)
-
-    # Validation
-    X_val, y_val, _ = prepare_numpy(args.data_dir, split="val", to_nchw=True)
-    best_ckpt = run_budget_loop_val(active_ds, oracle, qs, wrapper,
-                                  X_val, y_val,
-                                  budget=args.budget, batch=args.batch,
-                                  model_path=args.model_path,
-                                  select_metric=args.select_metric,
-                                  data_dir=args.data_dir)
-
-    # Test
-    X_test, y_test, _ = prepare_numpy(args.data_dir, split="test", to_nchw=True)
-    _ckpt = torch.load(best_ckpt, map_location=DEVICE)
-    if isinstance(_ckpt, dict) and "model_state_dict" in _ckpt:
-        wrapper.model.load_state_dict(_ckpt["model_state_dict"])
-    else:
-        #backward compatibility for previous models (to be deleted)
-        wrapper.model.load_state_dict(_ckpt)
-
-    if isinstance(_ckpt, dict) and "best_cycle" in _ckpt:
-        print(f"🏁 Best checkpoint from cycle {_ckpt['best_cycle']} "
-              f"(labeled={_ckpt.get('labeled_count','?')}), "
-              f"val_acc={_ckpt.get('val_acc','?'):.4f}, "
-              f"val_f1={_ckpt.get('val_f1','?'):.4f}, "
-              f"val_auc={_ckpt.get('val_auc','?'):.4f}, "
-              f"val_ap={_ckpt.get('val_ap','?'):.4f} "
-              f"[select_metric={_ckpt.get('select_metric','?')}, "
-              f"best_metric={_ckpt.get('best_metric','?'):.4f}]")
-
-    y_true, y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE)
     
-    proba = wrapper.predict_proba(X_test)[:, 1]
+    if args.batch <= 0: raise ValueError("--batch must be > 0")
+    if args.budget <= 0: raise ValueError("--budget must be > 0")
+    if args.budget % args.batch != 0:
+        raise ValueError(
+            f"Invalid combination: budget ({args.budget}) not divisible by batch ({args.batch}). "
+            "Each cycle must have the same number of samples."
+        )
+
+    if args.eval_only:
+        print("🔍 Mode: evaluation only (ACTIVE)")
+
+        ckpt = torch.load(args.model_path, map_location=DEVICE)
+        data_dir = args.data_dir or ckpt["data_dir"]
+        in_channels, num_classes = ckpt["in_channels"], ckpt["num_classes"]
+        print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
+
+        wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle)
+        wrapper.model.load_state_dict(ckpt["model_state_dict"])
+
+        X_val, y_val, _, _   = prepare_split_active(data_dir, split="val",  to_nchw=True)
+        X_test, y_test, _, _ = prepare_split_active(data_dir, split="test", to_nchw=True)
+
+    else:
+        print("🚀 Mode: training + evaluation (ACTIVE)")
+
+        X, y, in_channels, num_classes = prepare_split_active(args.data_dir, split="train", to_nchw=True)
+        print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
+
+        wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle)
+
+        active_ds, oracle, qs, init_idx = init_libact(X, y, args.init_size, args.method, wrapper, seed=args.seed)
+        print(f"Start: labeled={len(init_idx)}, unlabeled={len(y)-len(init_idx)}")
+
+        wrapper.train(active_ds)
+
+        # Validation
+        X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
+        best_ckpt = run_budget_loop_val(active_ds, oracle, qs, wrapper,
+                                    X_val, y_val,
+                                    budget=args.budget, batch=args.batch,
+                                    model_path=args.model_path,
+                                    select_metric=args.select_metric,
+                                    data_dir=args.data_dir)
+
+        # Test
+        X_test, y_test, _, _ = prepare_split_active(args.data_dir, split="test", to_nchw=True)
+        _ckpt = torch.load(best_ckpt, map_location=DEVICE)
+        if isinstance(_ckpt, dict) and "model_state_dict" in _ckpt:
+            wrapper.model.load_state_dict(_ckpt["model_state_dict"])
+        else:
+            #backward compatibility for previous models (to be deleted)
+            wrapper.model.load_state_dict(_ckpt)
+
+        if isinstance(_ckpt, dict) and "best_cycle" in _ckpt:
+            print(f"🏁 Best checkpoint from cycle {_ckpt['best_cycle']} "
+                f"(labeled={_ckpt.get('labeled_count','?')}), "
+                f"val_acc={_ckpt.get('val_acc','?'):.4f}, "
+                f"val_f1={_ckpt.get('val_f1','?'):.4f}, "
+                f"val_auc={_ckpt.get('val_auc','?'):.4f}, "
+                f"val_ap={_ckpt.get('val_ap','?'):.4f} "
+                f"[select_metric={_ckpt.get('select_metric','?')}, "
+                f"best_metric={_ckpt.get('best_metric','?'):.4f}]")
+
+    #y_true, y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE)
+
+    wrapper.model.eval()
+    with torch.inference_mode():
+        y_true, y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE)
+        proba = wrapper.predict_proba(X_test)[:, 1] if getattr(wrapper, "num_classes", None) == 2 else None
+
+    
+    # proba = None
+    # if wrapper.num_classes == 2:
+    #     proba = wrapper.predict_proba(X_test)[:, 1]
+    
     metrics = evaluate_predictions(y_true, y_pred, y_proba=proba)
-    print(f"[FINAL TEST] acc={metrics['accuracy']:.4f} "
-          f"f1={metrics['f1_macro']:.4f} "
-          f"auc={metrics.get('auc', float('nan')):.4f} "
-          f"ap={metrics.get('ap', float('nan')):.4f} "
-          f"(ckpt: {best_ckpt})")
+    print(f"[TEST] acc={metrics['accuracy']:.4f} "
+        f"f1={metrics['f1_macro']:.4f} "
+        f"auc={metrics.get('auc', float('nan')):.4f} "
+        f"ap={metrics.get('ap', float('nan')):.4f} "
+        f"(ckpt: {args.model_path})")
+    
     save_metrics_to_csv(metrics, RESULTS_PATH)
-    print(f"💾 Metrics saved to: {RESULTS_PATH}")
+    print(f"💾 Metrics saved to: {RESULTS_PATH}")    
