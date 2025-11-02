@@ -6,7 +6,6 @@ import argparse
 # Torch
 import torch
 import torch.nn as nn
-#import torch.nn.functional as F
 import torch.optim as optim
 from torchvision.models import resnet18, ResNet18_Weights
 
@@ -35,7 +34,7 @@ Example usage:
     python train_baseline.py --eval-only -m models/dermamnist_model.pth
 """
 
-# ======= Args to parse =======
+# === ARGUMENTS ===
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
@@ -50,19 +49,10 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
     return p.parse_args()
 
-# ======= Parameters =======
-# BEST_MODEL_PATH = args.model_path
-# BATCH_SIZE = 64
-# EPOCHS = 3
+# === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# if args.results_path is not None:
-#     RESULTS_PATH = args.results_path
-# else:
-#     model_filename = os.path.basename(args.model_path)
-#     model_name = os.path.splitext(model_filename)[0]
-#     RESULTS_PATH = os.path.join("results", model_name + ".csv")
 
-# ======= Model builder =======
+# === MODEL BUILDER ===
 def get_model(num_classes, in_channels):
     model = resnet18(weights=ResNet18_Weights.DEFAULT)
     if in_channels != 3:
@@ -70,20 +60,70 @@ def get_model(num_classes, in_channels):
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
 
-# ======= Evaluation function =======
-def evaluate(model, dataloader):
-    model.eval()
-    total, correct = 0, 0
-    with torch.no_grad():
-        for inputs, targets in dataloader:
+# === TRAINING + VALIDATION LOOP === 
+def run_supervised_loop(model, train_loader, val_loader, *,
+                        epochs: int, select_metric: str,
+                        model_path: str, data_dir: str,
+                        in_channels: int, num_classes: int) -> str:
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    best_sel = float("-inf")
+
+    for epoch in range(epochs):
+        # --- train ---
+        model.train()
+        running_loss, total, correct = 0.0, 0, 0
+        for inputs, targets in train_loader:
             inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
+            optimizer.zero_grad()
             outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
             _, predicted = torch.max(outputs, 1)
-            total += targets.size(0)
-            correct += (predicted == targets).sum().item()
-    return correct / total
+            total += targets.size(0); correct += (predicted == targets).sum().item()
+        train_acc = correct / total
+        avg_train_loss = running_loss / len(train_loader)
 
+        # --- val ---
+        model.eval()
+        yv_true, yv_pred = get_predictions(model, val_loader, DEVICE)
+        val_acc = accuracy_score(yv_true, yv_pred)
+        yv_proba = None
+        if getattr(model, "fc", None) is not None and getattr(model.fc, "out_features", None) == 2:
+            yv_proba = []
+            with torch.inference_mode():
+                for inputs, _ in val_loader:
+                    inputs = inputs.to(DEVICE)
+                    probs = torch.softmax(model(inputs), dim=1)[:, 1]
+                    yv_proba.extend(probs.detach().cpu().tolist())
+        val_f1  = f1_score(yv_true, yv_pred, average='macro')
+        val_auc = roc_auc_score(yv_true, yv_proba) if yv_proba is not None else float('nan')
+        val_ap  = average_precision_score(yv_true, yv_proba) if yv_proba is not None else float('nan')
+        print(f"Epoch [{epoch+1}/{epochs}] - Loss: {avg_train_loss:.4f} - Train Acc: {train_acc:.4f} "
+              f"- Val acc={val_acc:.4f} Val f1={val_f1:.4f} Val auc={val_auc:.4f} Val ap={val_ap:.4f}")
 
+        sel = {"acc": val_acc, "f1": val_f1, "auc": val_auc, "ap": val_ap}[select_metric]
+        if sel >= best_sel:
+            best_sel = sel
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'in_channels': in_channels,
+                'num_classes': num_classes,
+                'data_dir': data_dir,
+                'val_acc': float(val_acc),
+                'val_f1': float(val_f1),
+                'val_auc': float(val_auc),
+                'val_ap': float(val_ap),
+                'select_metric': select_metric,
+                'best_metric': float(sel),
+                'best_epoch': int(epoch + 1),
+            }, model_path)
+            print(f"✅ NEW BEST (by {select_metric}) → {best_sel:.4f}")
+    return model_path
+
+# === MAIN LOOP ===
 if __name__ == "__main__":
 
     args = parse_args()
@@ -99,7 +139,7 @@ if __name__ == "__main__":
     if args.eval_only:
         print("🔍 Mode: evaluation only (BASELINE)")
 
-        checkpoint = torch.load(args.model_path)
+        checkpoint = torch.load(args.model_path, map_location=DEVICE)
         num_classes = checkpoint['num_classes']
         in_channels = checkpoint['in_channels']
 
@@ -112,7 +152,7 @@ if __name__ == "__main__":
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(DEVICE)
 
-    # ======= Full training mode =======
+    # ======= TRAINING + VALIDATION LOOP =======
     else:
         print("🚀 Mode: training + evaluation (BASELINE)")
         DATA_DIR = args.data_dir
@@ -127,112 +167,28 @@ if __name__ == "__main__":
         print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
 
         model = get_model(num_classes, in_channels).to(DEVICE)
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-        best_val_acc = 0.0
+        best_ckpt = run_supervised_loop(model, train_loader, val_loader,
+                                epochs=args.epochs,
+                                select_metric=args.select_metric,
+                                model_path=args.model_path,
+                                data_dir=DATA_DIR,
+                                in_channels=in_channels,
+                                num_classes=num_classes)
 
-        for epoch in range(args.epochs):
-            model.train()
-            running_loss, total, correct = 0.0, 0, 0
-
-            for inputs, targets in train_loader:
-                inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
-
-                optimizer.zero_grad()
-                outputs = model(inputs)
-                loss = criterion(outputs, targets)
-                loss.backward()
-                optimizer.step()
-
-                running_loss += loss.item()
-                _, predicted = torch.max(outputs, 1)
-                total += targets.size(0)
-                correct += (predicted == targets).sum().item()
-
-            train_acc = correct / total
-            avg_train_loss = running_loss / len(train_loader)
-            #val_acc_old = evaluate(model, val_loader)
-
-            # === Validation ===
-            model.eval()
-            yv_true, yv_pred = get_predictions(model, val_loader, DEVICE)
-            val_acc = accuracy_score(yv_true, yv_pred)
-            # proba only for binary case
-            yv_proba = None
-            if getattr(model, "fc", None) is not None and getattr(model.fc, "out_features", None) == 2:
-                yv_proba = []
-                with torch.inference_mode():
-                    for inputs, _ in val_loader:
-                        inputs = inputs.to(DEVICE)
-                        probs = torch.softmax(model(inputs), dim=1)[:, 1]
-                        yv_proba.extend(probs.detach().cpu().tolist())
-            # if model.fc.out_features == 2:
-            #     yv_proba = []
-            #     model.eval()
-            #     with torch.no_grad():
-            #         for inputs, _ in val_loader:
-            #             probs = F.softmax(model(inputs.to(DEVICE)), dim=1)[:, 1]
-            #             yv_proba.extend(probs.detach().cpu().tolist())
-            val_f1  = f1_score(yv_true, yv_pred, average='macro')
-            val_auc = roc_auc_score(yv_true, yv_proba) if yv_proba is not None else float('nan')
-            val_ap  = average_precision_score(yv_true, yv_proba) if yv_proba is not None else float('nan')
-            print(f"Epoch [{epoch+1}/{args.epochs}] - Loss: {avg_train_loss:.4f} - Train Acc: {train_acc:.4f} "
-                    f"- Val acc={val_acc:.4f} Val f1={val_f1:.4f} Val auc={val_auc:.4f} Val ap={val_ap:.4f}")
-
-            sel = {"acc": val_acc, "f1": val_f1, "auc": val_auc, "ap": val_ap}[args.select_metric]
-            if epoch == 0:
-                best_sel = sel
-            if sel >= best_sel:
-                best_sel = sel
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'in_channels': in_channels,
-                    'num_classes': num_classes,
-                    'data_dir': DATA_DIR,
-                    'val_acc': float(val_acc),
-                    'val_f1': float(val_f1),
-                    'val_auc': float(val_auc),
-                    'val_ap': float(val_ap),
-                    'select_metric': args.select_metric,
-                    'best_metric': float(sel),
-                    'best_epoch': int(epoch + 1),
-                }, args.model_path)
-                print(f"✅ NEW BEST (by {args.select_metric}) → {best_sel:.4f}")
-
-            # print(f"Epoch [{epoch+1}/{EPOCHS}] - Loss: {running_loss:.4f} - Train Acc: {train_acc:.4f} - Val Acc: {val_acc:.4f}")
-
-            # if val_acc > best_val_acc:
-            #     best_val_acc = val_acc
-            #     torch.save({
-            #         'model_state_dict': model.state_dict(),
-            #         'in_channels': in_channels,
-            #         'num_classes': num_classes,
-            #         'val_acc': val_acc,
-            #         'data_dir': DATA_DIR
-            #     }, BEST_MODEL_PATH)
-            #     print(f"✅ NEW BEST MODEL FOUND (val_acc = {val_acc:.4f})")
-
-        checkpoint = torch.load(args.model_path)
+        checkpoint = torch.load(best_ckpt, map_location=DEVICE)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(DEVICE)
 
-    # ======= Evaluation on test set + metrics =======
+    # ======= EVALUATION =======
     print(f"📦 MODEL NAME: {args.model_path}")
     model.eval()
-
-    # test_acc = evaluate(model, test_loader)
-    # print(f"\n✅ Test accuracy: {test_acc:.4f}")
-
-    # val_acc_check = evaluate(model, val_loader)
-    # print(f"📈 Validation check: val_acc = {val_acc_check:.4f}")
 
     with torch.inference_mode():
         y_val_true, y_val_pred = get_predictions(model, val_loader, DEVICE)
         val_acc_check = accuracy_score(y_val_true, y_val_pred)
+        y_true, y_pred = get_predictions(model, test_loader, DEVICE)
     print(f"📈 Validation check: val_acc = {val_acc_check:.4f}")
-
-    y_true, y_pred = get_predictions(model, test_loader, DEVICE)
 
     proba = None
     if getattr(model, "fc", None) is not None and getattr(model.fc, "out_features", None) == 2:
@@ -244,14 +200,6 @@ if __name__ == "__main__":
                 probs = torch.softmax(logits, dim=1)[:, 1]
                 y_proba_list.extend(probs.detach().cpu().tolist())
         proba = y_proba_list
-    # if model.fc.out_features == 2: #it makes sense only for binary labels but the mechanism could be better
-    #     y_proba_list = []
-    #     with torch.no_grad():
-    #         for inputs, _ in test_loader:
-    #             inputs = inputs.to(DEVICE)
-    #             probs = F.softmax(model(inputs), dim=1)[:, 1]
-    #             y_proba_list.extend(probs.cpu().tolist())
-    #     proba = y_proba_list
 
     metrics = evaluate_predictions(y_true, y_pred, y_proba=proba)
     print(f"[TEST] acc={metrics['accuracy']:.4f} "

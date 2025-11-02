@@ -9,6 +9,7 @@ from pathlib import Path
 # Torch
 import torch
 from torch import nn, optim
+from torch.utils.data import TensorDataset, DataLoader
 from torchvision.models import resnet18, ResNet18_Weights   
 
 # Sklearn
@@ -16,7 +17,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_pre
 
 # Libact
 from libact.base.dataset import Dataset
-from libact.query_strategies import UncertaintySampling
+from libact.query_strategies import UncertaintySampling, RandomSampling
 from libact.labelers import IdealLabeler
 from libact.base.interfaces import ProbabilisticModel
 
@@ -27,7 +28,7 @@ from metrics import get_predictions, evaluate_predictions, save_metrics_to_csv
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# === Custom wrapper for libact <-> resnet to work ===
+# === CUSTOM WRAPPER FOR libact <-> resnet TO WORK ===
 # === https://github.com/ntucllab/libact/blob/master/libact/base/interfaces.py ===
 class TorchModelWrapper(ProbabilisticModel):
     def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1):
@@ -43,8 +44,6 @@ class TorchModelWrapper(ProbabilisticModel):
         self.epochs_per_cycle = epochs_per_cycle
 
     def predict_proba(self, X: np.ndarray, batch_size: int = 256) -> np.ndarray:
-        #import torch.nn.functional as F
-        from torch.utils.data import TensorDataset, DataLoader
         self.model.eval()
         if isinstance(X, list):
             X = np.stack(X, axis=0)
@@ -64,16 +63,8 @@ class TorchModelWrapper(ProbabilisticModel):
                 all_probs.append(probs.detach().cpu().numpy())
 
         return np.concatenate(all_probs, axis=0)
-        # probs = []
-        # with torch.no_grad():
-        #     for (xb,) in dl:
-        #         xb = xb.to(DEVICE, non_blocking=True)
-        #         logits = self.model(xb)
-        #         probs.append(F.softmax(logits, dim=1).cpu().numpy())
-        # return np.concatenate(probs, axis=0)
 
     def train_on_numpy(self, X: np.ndarray, y: np.ndarray, epochs: int = 1, batch_size: int = 64, verbose: bool = False):
-        from torch.utils.data import TensorDataset, DataLoader
         self.model.train()
         X_t = torch.from_numpy(X)
         if X_t.dtype == torch.uint8:
@@ -121,7 +112,7 @@ class TorchModelWrapper(ProbabilisticModel):
         return float((y_pred == y_arr).mean())
 
 # === SEED ===
-def set_seed(seed: int = 42):
+def set_seed(seed: int = 2137):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -143,12 +134,13 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
     p.add_argument("--select-metric", type=str, default="acc", choices=["acc", "f1", "auc", "ap"])
-    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--seed", type=int, default=2137)
     return p.parse_args()
 
 # === AL START === 
-def init_libact(X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 42):
-    rng = np.random.RandomState(seed)
+def init_libact(X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 2137):
+    #rng = np.random.RandomState(seed)
+    rng = np.random.default_rng()
     y = np.asarray(y)
     pos, neg = np.where(y == 1)[0], np.where(y == 0)[0]
     n_pos = max(1, int(round(init_size * len(pos) / len(y))))
@@ -163,29 +155,6 @@ def init_libact(X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapp
     oracle = IdealLabeler(Dataset(X, y))
     qs = UncertaintySampling(active_ds, method=method, model=wrapper)
     return active_ds, oracle, qs, init_idx
-
-# === Data preparation - sth like get_dataloaders === 
-# def prepare_numpy(data_dir: str, split: str = "train", to_nchw: bool = True) -> tuple[np.ndarray, np.ndarray, int]:
-#     """
-#     Loading and binary mapping of labels for split: “train”/'val'/“test”.
-#     - filters with get_valid_indices()
-#     - maps labels with map_labels() -> 0/1
-#     - optionally transposes to NCHW (PyTorch): (N,H,W,C)->(N,C,H,W)
-#     Returns: X, y_bin, in_channels
-#     """
-#     dataset_name = os.path.basename(os.path.normpath(data_dir))
-#     X, y = load_npz_split(data_dir, split)
-#     binary_mapping_required = {"bloodmnist", "octmnist", "pathmnist"}
-#     if dataset_name in binary_mapping_required:
-#         idx = get_valid_indices(dataset_name, y)
-#         X, y = X[idx], y[idx]
-#         y_bin = map_labels(dataset_name, y).astype(np.int64)
-#     else:
-#         y_bin = y.squeeze().astype(np.int64)
-#     if to_nchw and X.ndim == 4 and X.shape[-1] in (1, 3):
-#         X = np.transpose(X, (0, 3, 1, 2))
-#     in_channels = 1 if X.ndim == 3 else (X.shape[1] if X.ndim == 4 else 1)
-#     return X, y_bin, in_channels
 
 # === TRAINING + VALIDATION LOOP === 
 def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
@@ -203,7 +172,6 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
             active_ds.update(ask_id, y_new)
         wrapper.train(active_ds, verbose=True)
         cycle += 1; asked += k
-        #y_pred_old = wrapper.predict(X_val)
         _, y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE)
         acc = accuracy_score(y_val, y_pred)
         f1 = f1_score(y_val, y_pred, average='macro')
@@ -215,7 +183,7 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
             auc = roc_auc_score(y_val, proba)
             ap = average_precision_score(y_val, proba)
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
-        print(f"[cycle {cycle}/{int(args.budget / args.batch)}] labeled={labeled_cnt} val_acc={acc:.4f} val_f1={f1:.4f} val_auc={auc:.4f} val_ap={ap:.4f}")
+        print(f"[cycle {cycle}/{int(budget / batch)}] labeled={labeled_cnt} val_acc={acc:.4f} val_f1={f1:.4f} val_auc={auc:.4f} val_ap={ap:.4f}")
         sel = {"acc": acc, "f1": f1, "auc": auc, "ap": ap}[select_metric]
         if sel > best_sel:
             best_sel = sel
@@ -237,7 +205,6 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
     return model_path
 
 # === MAIN LOOP ===
-# python3 src/train_active.py --data-dir data/bloodmnist -m models/ac-test-0510pt2.pth
 if __name__ == "__main__":
     args = parse_args()
 
@@ -262,7 +229,7 @@ if __name__ == "__main__":
         print("🔍 Mode: evaluation only (ACTIVE)")
 
         ckpt = torch.load(args.model_path, map_location=DEVICE)
-        data_dir = args.data_dir or ckpt["data_dir"]
+        data_dir = ckpt["data_dir"]
         in_channels, num_classes = ckpt["in_channels"], ckpt["num_classes"]
         print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
 
@@ -299,9 +266,6 @@ if __name__ == "__main__":
         _ckpt = torch.load(best_ckpt, map_location=DEVICE)
         if isinstance(_ckpt, dict) and "model_state_dict" in _ckpt:
             wrapper.model.load_state_dict(_ckpt["model_state_dict"])
-        else:
-            #backward compatibility for previous models (to be deleted)
-            wrapper.model.load_state_dict(_ckpt)
 
         if isinstance(_ckpt, dict) and "best_cycle" in _ckpt:
             print(f"🏁 Best checkpoint from cycle {_ckpt['best_cycle']} "
@@ -313,17 +277,17 @@ if __name__ == "__main__":
                 f"[select_metric={_ckpt.get('select_metric','?')}, "
                 f"best_metric={_ckpt.get('best_metric','?'):.4f}]")
 
-    #y_true, y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE)
-
+    print(f"📦 MODEL NAME: {args.model_path}")
     wrapper.model.eval()
+
+    #val double check
+    yv_t, yv_p = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
+    val_acc_check = accuracy_score(yv_t, yv_p)
+    print(f"VAL ACC DOUBLE CHECK = {val_acc_check:.4f}")
+
     with torch.inference_mode():
         y_true, y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE)
         proba = wrapper.predict_proba(X_test)[:, 1] if getattr(wrapper, "num_classes", None) == 2 else None
-
-    
-    # proba = None
-    # if wrapper.num_classes == 2:
-    #     proba = wrapper.predict_proba(X_test)[:, 1]
     
     metrics = evaluate_predictions(y_true, y_pred, y_proba=proba)
     print(f"[TEST] acc={metrics['accuracy']:.4f} "

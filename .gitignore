@@ -2,10 +2,12 @@
 # actual data files, models, csv with results are not stored in git currently
 /data/*
 /models/* 
-/results/* 
+/results/*
+/logs/*  
 !/data/readme.txt
 !/models/readme.txt
 !/results/readme.txt
+!/logs/readme.txt
 
 # ======= GITHUB DEFAULT GITIGNORE =======
 # Byte-compiled / optimized / DLL files
