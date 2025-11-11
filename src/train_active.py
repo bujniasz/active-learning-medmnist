@@ -111,14 +111,6 @@ class TorchModelWrapper(ProbabilisticModel):
         y_pred = self.predict(X_arr)
         return float((y_pred == y_arr).mean())
 
-# === SEED ===
-def set_seed(seed: int = 2137):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
 # === ARGUMENTS ===
 def parse_args():
     p = argparse.ArgumentParser(description="Active Learning on bloodmnist with libact")
@@ -134,26 +126,95 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
     p.add_argument("--select-metric", type=str, default="acc", choices=["acc", "f1", "auc", "ap"])
-    p.add_argument("--seed", type=int, default=2137)
+    p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
+# === SEED ===
+def set_seed(seed: int = 42):
+    random.seed(seed)
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    try:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception as e:
+        print(f"[WARN] Could not set torch threads: {e}")
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception as e:
+        print(f"[WARN] torch.use_deterministic_algorithms(True) not supported: {e}")
+
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
 # === AL START === 
-def init_libact(X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 2137):
-    #rng = np.random.RandomState(seed)
-    rng = np.random.default_rng()
+def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 42):
+    rng = np.random.default_rng(seed)
+
     y = np.asarray(y)
-    pos, neg = np.where(y == 1)[0], np.where(y == 0)[0]
-    n_pos = max(1, int(round(init_size * len(pos) / len(y))))
-    n_neg = max(0, init_size - n_pos)
-    init_idx = np.concatenate([
-        rng.choice(pos, min(n_pos, len(pos)), replace=False),
-        rng.choice(neg, min(n_neg, len(neg)), replace=False)
-    ])
+    n_total = len(y)
+
+    pos_idx = np.where(y == 1)[0]
+    neg_idx = np.where(y == 0)[0]
+
+    n_pos_total = len(pos_idx)
+    n_neg_total = len(neg_idx)
+
+    if n_pos_total == 0 or n_neg_total == 0:
+        n_init = min(init_size, n_total)
+        all_idx = np.arange(n_total)
+        init_idx = rng.choice(all_idx, size=n_init, replace=False)
+
+        init_set = set(init_idx.tolist())
+        y_masked = [int(y[i]) if i in init_set else None for i in range(n_total)]
+
+        active_ds = Dataset(X, y_masked)
+        oracle = IdealLabeler(Dataset(X, y))
+        qs = UncertaintySampling(active_ds, method=method, model=wrapper)
+        return active_ds, oracle, qs, init_idx
+
+
+    frac_pos = n_pos_total / n_total
+
+    raw_n_pos = int(round(init_size * frac_pos))
+    min_per_class = 1
+
+    n_pos = max(min_per_class, raw_n_pos)
+    n_neg = max(min_per_class, init_size - n_pos)
+
+    total_requested = n_pos + n_neg
+    if total_requested > init_size:
+        overflow = total_requested - init_size
+        if n_pos >= n_neg:
+            n_pos = max(min_per_class, n_pos - overflow)
+        else:
+            n_neg = max(min_per_class, n_neg - overflow)
+
+    n_pos_sample = min(n_pos, n_pos_total)
+    n_neg_sample = min(n_neg, n_neg_total)
+
+    chosen_pos = rng.choice(pos_idx, size=n_pos_sample, replace=False)
+    chosen_neg = rng.choice(neg_idx, size=n_neg_sample, replace=False)
+
+    init_idx = np.concatenate([chosen_pos, chosen_neg])
+
+    rng.shuffle(init_idx)
+
     init_set = set(init_idx.tolist())
-    y_masked = [int(y[i]) if i in init_set else None for i in range(len(y))]
+    y_masked = [int(y[i]) if i in init_set else None for i in range(n_total)]
+
     active_ds = Dataset(X, y_masked)
     oracle = IdealLabeler(Dataset(X, y))
     qs = UncertaintySampling(active_ds, method=method, model=wrapper)
+
     return active_ds, oracle, qs, init_idx
 
 # === TRAINING + VALIDATION LOOP === 
@@ -200,6 +261,7 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                 "best_metric": float(sel),
                 "best_cycle": int(cycle),
                 "labeled_count": int(labeled_cnt),
+                "seed": int(args.seed),
             }, model_path)
             print(f"✅ NEW BEST (by {args.select_metric}) → {best_sel:.4f}")
     return model_path
@@ -248,7 +310,19 @@ if __name__ == "__main__":
         wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle)
 
         active_ds, oracle, qs, init_idx = init_libact(X, y, args.init_size, args.method, wrapper, seed=args.seed)
-        print(f"Start: labeled={len(init_idx)}, unlabeled={len(y)-len(init_idx)}")
+
+        y = np.asarray(y)
+        init_labels = y[init_idx]
+        unique, counts = np.unique(init_labels, return_counts=True)
+        class_dist = {int(k): int(v) for k, v in zip(unique, counts)}
+
+        class0 = class_dist.get(0, 0)
+        class1 = class_dist.get(1, 0)
+
+        print(
+            f"Start: labeled={len(init_idx)}, unlabeled={len(y) - len(init_idx)}, "
+            f"class 0 = {class0}, class 1 = {class1}"
+        )
 
         wrapper.train(active_ds)
 
@@ -296,5 +370,6 @@ if __name__ == "__main__":
         f"ap={metrics.get('ap', float('nan')):.4f} "
         f"(ckpt: {args.model_path})")
     
+    metrics["seed"] = int(args.seed)
     save_metrics_to_csv(metrics, RESULTS_PATH)
     print(f"💾 Metrics saved to: {RESULTS_PATH}")    

@@ -2,6 +2,8 @@
 # General
 import os
 import argparse
+import random
+import numpy as np
 
 # Torch
 import torch
@@ -46,8 +48,35 @@ def parse_args():
                         choices=["acc", "f1", "auc", "ap"],
                         help="Metric used to select the best checkpoint")
     p.add_argument("--batch-size", type=int, default=64, help="Batch size for training")
-    p.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
+    p.add_argument("--epochs", type=int, default=1, help="Number of training epochs")
+    p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
+
+# === SEED ===
+def set_seed(seed: int = 42):
+    random.seed(seed)
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    try:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except Exception as e:
+        print(f"[WARN] Could not set torch threads: {e}")
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception as e:
+        print(f"[WARN] torch.use_deterministic_algorithms(True) not supported: {e}")
+
+    os.environ["PYTHONHASHSEED"] = str(seed)
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -119,6 +148,7 @@ def run_supervised_loop(model, train_loader, val_loader, *,
                 'select_metric': select_metric,
                 'best_metric': float(sel),
                 'best_epoch': int(epoch + 1),
+                "seed": int(args.seed),
             }, model_path)
             print(f"✅ NEW BEST (by {select_metric}) → {best_sel:.4f}")
     return model_path
@@ -127,6 +157,7 @@ def run_supervised_loop(model, train_loader, val_loader, *,
 if __name__ == "__main__":
 
     args = parse_args()
+    set_seed(args.seed)
 
     if args.results_path is not None:
         RESULTS_PATH = args.results_path
@@ -158,7 +189,7 @@ if __name__ == "__main__":
         DATA_DIR = args.data_dir
 
         # This call now also handles binary label mapping and filtering
-        train_loader, val_loader, test_loader = prepare_split_baseline(DATA_DIR, batch_size=args.batch_size)
+        train_loader, val_loader, test_loader = prepare_split_baseline(DATA_DIR, batch_size=args.batch_size, seed=args.seed)
 
         sample_x, _ = next(iter(train_loader))
         in_channels = sample_x.shape[1]
@@ -207,4 +238,6 @@ if __name__ == "__main__":
         f"auc={metrics.get('auc', float('nan')):.4f} "
         f"ap={metrics.get('ap', float('nan')):.4f} "
         f"(ckpt: {args.model_path})")
+    
+    metrics["seed"] = int(args.seed)
     save_metrics_to_csv(metrics, RESULTS_PATH)
