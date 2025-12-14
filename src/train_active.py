@@ -31,7 +31,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # === CUSTOM WRAPPER FOR libact <-> resnet TO WORK ===
 # === https://github.com/ntucllab/libact/blob/master/libact/base/interfaces.py ===
 class TorchModelWrapper(ProbabilisticModel):
-    def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1):
+    def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1, seed: int | None = None):
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.model = resnet18(weights=ResNet18_Weights.DEFAULT)
@@ -42,6 +42,7 @@ class TorchModelWrapper(ProbabilisticModel):
         self.loss_fn = nn.CrossEntropyLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.epochs_per_cycle = epochs_per_cycle
+        self.seed = seed
 
     def predict_proba(self, X: np.ndarray, batch_size: int = 256) -> np.ndarray:
         self.model.eval()
@@ -77,7 +78,12 @@ class TorchModelWrapper(ProbabilisticModel):
         if n < 2:
             return  # skipping if not enough instances
         eff_bs = min(batch_size, n)
-        dl = DataLoader(ds, batch_size=eff_bs, shuffle=True, drop_last=True)
+        gen = None
+        if self.seed is not None:
+            gen = torch.Generator()
+            gen.manual_seed(self.seed)
+
+        dl = DataLoader(ds, batch_size=eff_bs, shuffle=True, drop_last=True, generator=gen, num_workers=0)
         for _ in range(epochs):
             total_loss = 0.0
             for xb, yb in dl:
@@ -307,7 +313,7 @@ if __name__ == "__main__":
         X, y, in_channels, num_classes = prepare_split_active(args.data_dir, split="train", to_nchw=True)
         print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
 
-        wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle)
+        wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle, seed=args.seed)
 
         active_ds, oracle, qs, init_idx = init_libact(X, y, args.init_size, args.method, wrapper, seed=args.seed)
 
