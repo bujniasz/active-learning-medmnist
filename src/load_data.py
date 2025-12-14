@@ -1,11 +1,17 @@
+# === IMPORTS ===
+# General
 import os
 import numpy as np
+import random
+
+# Torch
 import torch
 from torch.utils.data import Dataset, DataLoader
+
+# Custom
 from labels_mapping import map_labels, get_valid_indices
 
 binary_mapping_required = {"bloodmnist", "octmnist", "pathmnist"}
-
 class MedMNISTDataset(Dataset):
     def __init__(self, images, labels, transform=None):
         self.images = images
@@ -27,7 +33,7 @@ class MedMNISTDataset(Dataset):
         elif x.shape in [(1, 28, 28), (3, 28, 28)]:
             pass
         else:
-            raise ValueError(f"Nieznany format obrazu: {x.shape}")
+            raise ValueError(f"Unknown image format: {x.shape}")
 
         x = torch.tensor(x, dtype=torch.float32) / 255.0  # normalisation
         y = torch.tensor(y, dtype=torch.long).squeeze()   # (N,1) -> (N,)
@@ -37,7 +43,6 @@ class MedMNISTDataset(Dataset):
 
         return x, y
 
-
 def load_npz_split(data_dir, split):
     """
     Loads images and labels for a given partition (train/val/test)
@@ -46,36 +51,77 @@ def load_npz_split(data_dir, split):
     labels = np.load(os.path.join(data_dir, f"{split}_labels.npy"))
     return images, labels
 
+def seed_worker(worker_id):
+    """
+    Sets the seed for randomness within the worker process:
+    - torch.initial_seed() -> worker seed (comes from the DataLoader generator)
+    - we pass this seed to numpy.random and random
+    """
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
-def get_dataloaders(data_dir, batch_size=64, num_workers=2):
+def prepare_split_baseline(data_dir, batch_size=64, num_workers=2, seed: int | None = None):
     """
     Returns dataloaders for train/val/test sets.
-    it applies binary label mapping and filtering (if needed).
+    It applies binary label mapping and filtering (if needed).
+    If `seed` is not None, train loader uses a deterministic generator
+    and workers mają zseedowane numpy/random zgodnie z generatorem.
     """
     splits = ['train', 'val', 'test']
     dataloaders = {}
 
     dataset_name = os.path.basename(os.path.normpath(data_dir))
 
+    gen = None
+    worker_fn = None
+    if seed is not None:
+        gen = torch.Generator()
+        gen.manual_seed(seed)
+        worker_fn = seed_worker
+
     for split in splits:
         images, labels = load_npz_split(data_dir, split)
 
         if dataset_name in binary_mapping_required:
-            valid_indices = get_valid_indices(dataset_name, labels) # it is for filtering purposes - nothing happens if that's not a pathmnist
+            valid_indices = get_valid_indices(dataset_name, labels)
             images = images[valid_indices]
             labels = labels[valid_indices]
-
             labels = map_labels(dataset_name, labels)
 
         dataset = MedMNISTDataset(images, labels)
+
         dataloaders[split] = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=(split == 'train'),
-            num_workers=num_workers
+            num_workers=num_workers,
+            generator=gen if split == 'train' else None,
+            worker_init_fn=worker_fn if split == 'train' else None,
         )
 
     return dataloaders['train'], dataloaders['val'], dataloaders['test']
+
+
+
+def prepare_split_active(data_dir: str, split: str = "train", to_nchw: bool = True):
+    dataset_name = os.path.basename(os.path.normpath(data_dir))
+
+    X, y = load_npz_split(data_dir, split)
+
+    if dataset_name in binary_mapping_required:
+        idx = get_valid_indices(dataset_name, y)
+        X, y = X[idx], y[idx]
+        y = map_labels(dataset_name, y).astype(np.int64)
+    else:
+        y = y.squeeze().astype(np.int64)
+
+    if to_nchw and X.ndim == 4 and X.shape[-1] in (1, 3):
+        X = np.transpose(X, (0, 3, 1, 2))
+
+    in_channels = 1 if X.ndim == 3 else (X.shape[1] if X.ndim == 4 else 1)
+    num_classes = int(np.unique(y).size)
+    return X, y, in_channels, num_classes
 
 # TEST 
 # if __name__ == "__main__":
