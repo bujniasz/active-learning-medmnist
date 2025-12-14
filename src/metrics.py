@@ -14,9 +14,9 @@ from torch.utils.data import DataLoader, TensorDataset
 
 def get_predictions(model, data, device, batch_size: int = 256):
     """
-    Zwraca y_true, y_pred używając jednego interfejsu:
-    - data może być DataLoaderEM, albo
-    - krotką (X, y) jako numpy arrays lub torch.Tensors.
+    Returns y_true, y_pred using a single interface:
+    - data can be either DataLoaderEM, or
+    - a tuple (X, y) as numpy arrays or torch.Tensors
     """
     model.eval()
     y_true, y_pred = [], []

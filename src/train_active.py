@@ -17,7 +17,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_pre
 
 # Libact
 from libact.base.dataset import Dataset
-from libact.query_strategies import UncertaintySampling, RandomSampling
+from libact.query_strategies import UncertaintySampling
 from libact.labelers import IdealLabeler
 from libact.base.interfaces import ProbabilisticModel
 
@@ -324,10 +324,55 @@ if __name__ == "__main__":
             f"class 0 = {class0}, class 1 = {class1}"
         )
 
-        wrapper.train(active_ds)
+        ### FIRST TRAINING BEFORE ANOTATIONS
+        #wrapper.train(active_ds)
+        print("\n🔸 Initial training on starting labeled set")
+        wrapper.train(active_ds, verbose=True)
+
+        # === Initial evaluation (cycle 0) ===
+        print("🔍 Evaluating initial model (cycle 0)...")
+        X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
+        yv_t, yv_p = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
+
+        acc0 = accuracy_score(y_val, yv_p)
+        f10 = f1_score(y_val, yv_p, average='macro')
+
+        proba0 = None
+        auc0 = float("nan")
+        ap0 = float("nan")
+        if wrapper.num_classes == 2:
+            proba0 = wrapper.predict_proba(X_val)[:, 1]
+            auc0 = roc_auc_score(y_val, proba0)
+            ap0 = average_precision_score(y_val, proba0)
+
+        labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
+        print(
+            f"[cycle 0] labeled={labeled_cnt} "
+            f"val_acc={acc0:.4f} val_f1={f10:.4f} "
+            f"val_auc={auc0:.4f} val_ap={ap0:.4f}"
+        )
+
+        # === OPTIONAL: Save cycle-0 model as current best ===
+        best_sel = {"acc": acc0, "f1": f10, "auc": auc0, "ap": ap0}[args.select_metric]
+        torch.save({
+            "model_state_dict": wrapper.model.state_dict(),
+            "in_channels": wrapper.in_channels,
+            "num_classes": wrapper.num_classes,
+            "data_dir": args.data_dir,
+            "val_acc": float(acc0),
+            "val_f1": float(f10),
+            "val_auc": float(auc0),
+            "val_ap": float(ap0),
+            "select_metric": args.select_metric,
+            "best_metric": float(best_sel),
+            "best_cycle": 0,
+            "labeled_count": int(labeled_cnt),
+            "seed": int(args.seed),
+        }, args.model_path)
+        print(f"💾 Saved initial (cycle 0) model → {args.model_path}")
 
         # Validation
-        X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
+        #X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
         best_ckpt = run_budget_loop_val(active_ds, oracle, qs, wrapper,
                                     X_val, y_val,
                                     budget=args.budget, batch=args.batch,

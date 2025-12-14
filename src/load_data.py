@@ -33,7 +33,7 @@ class MedMNISTDataset(Dataset):
         elif x.shape in [(1, 28, 28), (3, 28, 28)]:
             pass
         else:
-            raise ValueError(f"Nieznany format obrazu: {x.shape}")
+            raise ValueError(f"Unknown image format: {x.shape}")
 
         x = torch.tensor(x, dtype=torch.float32) / 255.0  # normalisation
         y = torch.tensor(y, dtype=torch.long).squeeze()   # (N,1) -> (N,)
@@ -53,9 +53,9 @@ def load_npz_split(data_dir, split):
 
 def seed_worker(worker_id):
     """
-    Ustawia seed dla losowości wewnątrz procesu workera:
-    - torch.initial_seed() -> seed workera (pochodzi z generatora DataLoadera)
-    - ten seed przekładamy na numpy.random i random
+    Sets the seed for randomness within the worker process:
+    - torch.initial_seed() -> worker seed (comes from the DataLoader generator)
+    - we pass this seed to numpy.random and random
     """
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
