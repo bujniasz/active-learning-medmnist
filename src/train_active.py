@@ -17,7 +17,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_pre
 
 # Libact
 from libact.base.dataset import Dataset
-from libact.query_strategies import UncertaintySampling
+from libact.query_strategies import UncertaintySampling, RandomSampling
 from libact.labelers import IdealLabeler
 from libact.base.interfaces import ProbabilisticModel
 
@@ -64,6 +64,45 @@ class TorchModelWrapper(ProbabilisticModel):
                 all_probs.append(probs.detach().cpu().numpy())
 
         return np.concatenate(all_probs, axis=0)
+
+    def extract_embeddings(self, X: np.ndarray, batch_size: int = 256) -> np.ndarray:
+        """
+        Returns embeddings from the penultimate layer (after avgpool).
+        Output shape: (N, D), e.g. D=512 for ResNet18.
+        """
+        self.model.eval()
+        if isinstance(X, list):
+            X = np.stack(X, axis=0)
+
+        X_t = torch.from_numpy(X)
+        if X_t.dtype == torch.uint8:
+            X_t = X_t.float() / 255.0
+        if X_t.ndim == 3:  # (N,H,W) -> (N,1,H,W)
+            X_t = X_t.unsqueeze(1)
+
+        ds = TensorDataset(X_t)
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
+
+        embeddings = []
+
+        def hook_fn(module, input, output):
+            # output shape: (N, 512, 1, 1)
+            embeddings.append(output.detach().cpu())
+
+        handle = self.model.avgpool.register_forward_hook(hook_fn)
+
+        with torch.inference_mode():
+            for (inputs,) in dl:
+                inputs = inputs.to(DEVICE)
+                _ = self.model(inputs)
+
+        handle.remove()
+
+        feats = torch.cat(embeddings, dim=0)
+        feats = feats.view(feats.size(0), -1)  # (N, 512)
+        return feats.numpy()
+
+
 
     def train_on_numpy(self, X: np.ndarray, y: np.ndarray, epochs: int = 1, batch_size: int = 64, verbose: bool = False):
         self.model.train()
@@ -133,6 +172,7 @@ def parse_args():
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
     p.add_argument("--select-metric", type=str, default="acc", choices=["acc", "f1", "auc", "ap"])
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--strategy", type=str, default="uncertainty", choices=["uncertainty", "random"], help="Query strategy")
     return p.parse_args()
 
 # === SEED ===
@@ -162,7 +202,7 @@ def set_seed(seed: int = 42):
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 # === AL START === 
-def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 42):
+def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 42, strategy="uncertainty"):
     rng = np.random.default_rng(seed)
 
     y = np.asarray(y)
@@ -184,7 +224,10 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrap
 
         active_ds = Dataset(X, y_masked)
         oracle = IdealLabeler(Dataset(X, y))
-        qs = UncertaintySampling(active_ds, method=method, model=wrapper)
+        if strategy == "random":
+            qs = RandomSampling(active_ds, random_state=seed)
+        else:
+            qs = UncertaintySampling(active_ds, method=method, model=wrapper)
         return active_ds, oracle, qs, init_idx
 
 
@@ -219,7 +262,10 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrap
 
     active_ds = Dataset(X, y_masked)
     oracle = IdealLabeler(Dataset(X, y))
-    qs = UncertaintySampling(active_ds, method=method, model=wrapper)
+    if args.strategy == "random":
+        qs = RandomSampling(active_ds, random_state=seed)
+    else:
+        qs = UncertaintySampling(active_ds, method=method, model=wrapper)
 
     return active_ds, oracle, qs, init_idx
 
@@ -315,7 +361,7 @@ if __name__ == "__main__":
 
         wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle, seed=args.seed)
 
-        active_ds, oracle, qs, init_idx = init_libact(X, y, args.init_size, args.method, wrapper, seed=args.seed)
+        active_ds, oracle, qs, init_idx = init_libact(X, y, args.init_size, args.method, wrapper, seed=args.seed, strategy=args.strategy)
 
         y = np.asarray(y)
         init_labels = y[init_idx]
@@ -327,7 +373,8 @@ if __name__ == "__main__":
 
         print(
             f"Start: labeled={len(init_idx)}, unlabeled={len(y) - len(init_idx)}, "
-            f"class 0 = {class0}, class 1 = {class1}"
+            f"class 0 = {class0}, class 1 = {class1} "
+            f"Strategy = {args.strategy}"
         )
 
         ### FIRST TRAINING BEFORE ANOTATIONS
@@ -339,6 +386,8 @@ if __name__ == "__main__":
         print("🔍 Evaluating initial model (cycle 0)...")
         X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
         yv_t, yv_p = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
+        emb_dbg = wrapper.extract_embeddings(X_val[:32])
+        print(f"🧩 Embeddings debug: {emb_dbg.shape}")
 
         acc0 = accuracy_score(y_val, yv_p)
         f10 = f1_score(y_val, yv_p, average='macro')
