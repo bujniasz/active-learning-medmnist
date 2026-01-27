@@ -5,6 +5,7 @@ import numpy as np
 import argparse
 import random
 from pathlib import Path
+import json
 
 # Torch
 import torch
@@ -28,10 +29,80 @@ from metrics import get_predictions, evaluate_predictions, save_metrics_to_csv
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
+# def predictive_entropy(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+#     """
+#     probs: (N, C) mean predictive probabilities
+#     returns: (N,) entropy
+#     """
+#     p = np.clip(probs, eps, 1.0)
+#     return -np.sum(p * np.log(p), axis=1)
+
+def entropy_rows(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """
+    probs: (..., C)
+    returns entropy over last axis: (...)
+    """
+    p = np.clip(probs, eps, 1.0)
+    return -np.sum(p * np.log(p), axis=-1)
+
+def bald_score(probs_T: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """
+    probs_T: (T, N, C)
+    returns: (N,)  BALD = H(mean_p) - mean_t H(p_t)
+    """
+    mean_p = np.mean(probs_T, axis=0)              # (N, C)
+    H_mean = entropy_rows(mean_p, eps=eps)         # (N,)
+    H_each = entropy_rows(probs_T, eps=eps)        # (T, N)
+    return H_mean - np.mean(H_each, axis=0)        # (N,)
+
+def k_center_greedy(emb: np.ndarray, k: int, seed: int = 42, first: int | None = None) -> list[int]:
+    """
+    Select k points using farthest-first traversal (k-center greedy).
+    emb: (M, D)
+    returns indices in [0..M-1]
+    """
+    rng = np.random.default_rng(seed)
+    M = emb.shape[0]
+    if k >= M:
+        return list(range(M))
+
+    if first is None:
+        first = int(rng.integers(0, M))
+    else:
+        first = int(first)
+        if first < 0 or first >= M:
+            raise ValueError(f"`first` must be in [0, {M-1}], got {first}")
+
+    selected = [first]
+
+    # distances to closest selected
+    d = np.linalg.norm(emb - emb[first], axis=1)
+
+    for _ in range(1, k):
+        nxt = int(np.argmax(d))
+        selected.append(nxt)
+        d = np.minimum(d, np.linalg.norm(emb - emb[nxt], axis=1))
+
+    return selected
+
+
+def egl_fc_score(emb: np.ndarray, probs: np.ndarray) -> np.ndarray:
+    """
+    EGL for last linear layer (fc) under softmax+CE.
+    emb: (N, D) embeddings
+    probs: (N, C) predicted probabilities
+    returns: (N,) scores (higher = more informative)
+    """
+    emb_norm2 = np.sum(emb * emb, axis=1)          # (N,)
+    sum_p2 = np.sum(probs * probs, axis=1)         # (N,)
+    return (emb_norm2 + 1.0) * (1.0 - sum_p2)      # (N,)
+
+
 # === CUSTOM WRAPPER FOR libact <-> resnet TO WORK ===
 # === https://github.com/ntucllab/libact/blob/master/libact/base/interfaces.py ===
 class TorchModelWrapper(ProbabilisticModel):
-    def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1, seed: int | None = None):
+    def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1, seed: int | None = None, dropout_p: float = 0.2):
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.model = resnet18(weights=ResNet18_Weights.DEFAULT)
@@ -43,6 +114,40 @@ class TorchModelWrapper(ProbabilisticModel):
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.epochs_per_cycle = epochs_per_cycle
         self.seed = seed
+        self.dropout = nn.Dropout(p=dropout_p)
+
+    def _forward_logits_with_dropout(self, inputs: torch.Tensor, enable_dropout: bool) -> torch.Tensor:
+        """
+        Forward that applies dropout on features before fc.
+        If enable_dropout=True, dropout is in train mode; otherwise eval mode.
+        """
+        # keep backbone in eval (esp. batchnorm stability)
+        self.model.eval()
+
+        # control dropout behavior explicitly
+        if enable_dropout:
+            self.dropout.train()
+        else:
+            self.dropout.eval()
+
+        # forward through resnet up to features
+        x = self.model.conv1(inputs)
+        x = self.model.bn1(x)
+        x = self.model.relu(x)
+        x = self.model.maxpool(x)
+
+        x = self.model.layer1(x)
+        x = self.model.layer2(x)
+        x = self.model.layer3(x)
+        x = self.model.layer4(x)
+
+        x = self.model.avgpool(x)
+        x = torch.flatten(x, 1)  # (N, 512)
+
+        x = self.dropout(x)
+        logits = self.model.fc(x)  # fc remains Linear
+        return logits
+
 
     def predict_proba(self, X: np.ndarray, batch_size: int = 256) -> np.ndarray:
         self.model.eval()
@@ -59,11 +164,83 @@ class TorchModelWrapper(ProbabilisticModel):
         with torch.inference_mode():
             for (inputs,) in dl:
                 inputs = inputs.to(DEVICE)
-                logits = self.model(inputs)
+                logits = self._forward_logits_with_dropout(inputs, enable_dropout=False)
                 probs = torch.softmax(logits, dim=1)
                 all_probs.append(probs.detach().cpu().numpy())
 
         return np.concatenate(all_probs, axis=0)
+
+    def mc_predict_proba(self, X: np.ndarray, T: int = 10, base_seed: int | None = None, batch_size: int = 256) -> np.ndarray:
+        """
+        MC Dropout predictive distribution: mean of T stochastic forward passes.
+        Returns mean probabilities of shape (N, C).
+        """
+        if isinstance(X, list):
+            X = np.stack(X, axis=0)
+
+        X_t = torch.from_numpy(X)
+        if X_t.dtype == torch.uint8:
+            X_t = X_t.float() / 255.0
+        if X_t.ndim == 3:
+            X_t = X_t.unsqueeze(1)
+
+        ds = TensorDataset(X_t)
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
+
+        self.model.eval()
+        # enable dropout only
+        # for m in self.model.modules():
+        #     if isinstance(m, nn.Dropout):
+        #         m.train()
+
+        probs_T = []
+        for t in range(T):
+            if base_seed is not None:
+                torch.manual_seed(int(base_seed) + t)
+            all_probs = []
+            with torch.inference_mode():
+                for (inputs,) in dl:
+                    inputs = inputs.to(DEVICE)
+                    logits = self._forward_logits_with_dropout(inputs, enable_dropout=True)
+                    all_probs.append(torch.softmax(logits, dim=1).cpu().numpy())
+            probs_T.append(np.concatenate(all_probs, axis=0))
+
+        return np.mean(np.stack(probs_T, axis=0), axis=0)
+
+
+    def mc_predict_proba_T(self, X: np.ndarray, T: int = 10, base_seed: int | None = None, batch_size: int = 256) -> np.ndarray:
+        """
+        Returns probabilities for each MC pass.
+        Shape: (T, N, C)
+        """
+        if isinstance(X, list):
+            X = np.stack(X, axis=0)
+
+        X_t = torch.from_numpy(X)
+        if X_t.dtype == torch.uint8:
+            X_t = X_t.float() / 255.0
+        if X_t.ndim == 3:
+            X_t = X_t.unsqueeze(1)
+
+        ds = TensorDataset(X_t)
+        dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
+
+        probs_T = []
+        for t in range(T):
+            if base_seed is not None:
+                torch.manual_seed(int(base_seed) + t)
+
+            all_probs = []
+            with torch.inference_mode():
+                for (inputs,) in dl:
+                    inputs = inputs.to(DEVICE)
+                    logits = self._forward_logits_with_dropout(inputs, enable_dropout=True)
+                    all_probs.append(torch.softmax(logits, dim=1).cpu().numpy())
+
+            probs_T.append(np.concatenate(all_probs, axis=0))
+
+        return np.stack(probs_T, axis=0)
+
 
     def extract_embeddings(self, X: np.ndarray, batch_size: int = 256) -> np.ndarray:
         """
@@ -172,7 +349,10 @@ def parse_args():
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
     p.add_argument("--select-metric", type=str, default="acc", choices=["acc", "f1", "auc", "ap"])
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--strategy", type=str, default="uncertainty", choices=["uncertainty", "random"], help="Query strategy")
+    p.add_argument("--strategy", type=str, default="uncertainty", choices=["uncertainty", "random", "mc_entropy", "mc_bald", "mc_entropy_diverse", "mc_bald_diverse", "entropy_diverse", "egl_fc"], help="Query strategy")
+    p.add_argument("--mc-T", type=int, default=10, help="Number of MC Dropout forward passes")
+    p.add_argument("--candidate-size", type=int, default=2000, help="Unlabeled candidates to score each query (mc strategies)")
+    p.add_argument("--top-m-mult", type=int, default=10, help="For diverse batch: candidates = top_m_mult * batch")
     return p.parse_args()
 
 # === SEED ===
@@ -276,13 +456,105 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                         data_dir: str | None = None) -> str:
     
     asked = 0; cycle = 0; best_sel = float("-inf")
+    ask_log = []
     Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
     while asked < budget:
         k = min(batch, budget - asked)
-        for _ in range(k):
-            ask_id = qs.make_query()
-            y_new = oracle.label(active_ds.data[ask_id][0])
-            active_ds.update(ask_id, y_new)
+        if args.strategy in ("mc_bald_diverse", "mc_entropy_diverse", "entropy_diverse"):
+            cand_seed = int(args.seed + 10_000 * cycle + asked)
+            mc_seed   = int(args.seed + 20_000 * cycle + asked)
+            unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
+
+            if len(unlabeled_ids) > args.candidate_size:
+                rng = np.random.default_rng(cand_seed)
+                unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
+
+            X_u = active_ds._X[unlabeled_ids]
+
+            # --- score ---
+            if args.strategy == "entropy_diverse":
+                probs = wrapper.predict_proba(X_u)
+                scores = entropy_rows(probs)
+            elif args.strategy == "mc_entropy_diverse":
+                probs = wrapper.mc_predict_proba(X_u, T=args.mc_T, base_seed=mc_seed)
+                scores = entropy_rows(probs)  # (N,)
+            else:  # mc_bald_diverse
+                probs_T = wrapper.mc_predict_proba_T(X_u, T=args.mc_T, base_seed=mc_seed)
+                scores = bald_score(probs_T)  # (N,)
+
+            # --- top-M by uncertainty ---
+            M = min(len(unlabeled_ids), args.top_m_mult * k)
+            top_local = np.argsort(scores)[-M:]
+
+            # --- diversity on embeddings among top-M ---
+            E_top = wrapper.extract_embeddings(X_u[top_local])
+            first_local = int(len(top_local) - 1)
+            diverse_local = k_center_greedy(E_top, k=k, seed=args.seed, first = first_local)
+
+            batch_local = top_local[diverse_local]
+            ask_ids = [int(unlabeled_ids[int(j)]) for j in batch_local]
+
+            ask_log.append({
+                "cycle": cycle,
+                "ask_ids": ask_ids,
+            })
+
+            for ask_id in ask_ids:
+                y_new = oracle.label(active_ds.data[ask_id][0])
+                active_ds.update(ask_id, y_new)
+        else:
+            cycle_ask_ids = []
+            for _ in range(k):
+                if args.strategy == "egl_fc":
+                    unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
+
+                    cand_seed = int(args.seed + 10_000 * cycle + asked)
+                    if len(unlabeled_ids) > args.candidate_size:
+                        rng = np.random.default_rng(cand_seed)
+                        unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
+
+                    X_u = active_ds._X[unlabeled_ids]
+
+                    probs = wrapper.predict_proba(X_u)
+                    emb = wrapper.extract_embeddings(X_u)
+
+                    scores = egl_fc_score(emb, probs)
+                    pick_local = int(np.argmax(scores))
+                    ask_id = int(unlabeled_ids[pick_local])
+
+                elif args.strategy in ("mc_entropy", "mc_bald"):
+                    cand_seed = int(args.seed + 10_000 * cycle + asked)
+                    mc_seed   = int(args.seed + 20_000 * cycle + asked)
+                    
+                    unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
+
+                    if len(unlabeled_ids) > args.candidate_size:
+                        rng = np.random.default_rng(cand_seed)  # (opcjonalnie później poprawimy seed o asked/cycle)
+                        unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
+
+                    X_u = active_ds._X[unlabeled_ids]
+
+                    if args.strategy == "mc_entropy":
+                        probs = wrapper.mc_predict_proba(X_u, T=args.mc_T, base_seed=mc_seed)
+                        scores = entropy_rows(probs)  # (N,)
+                    else:  # mc_bald
+                        probs_T = wrapper.mc_predict_proba_T(X_u, T=args.mc_T, base_seed=mc_seed)
+                        scores = bald_score(probs_T)  # (N,)
+
+                    pick_local = int(np.argmax(scores))
+                    ask_id = int(unlabeled_ids[pick_local])
+                else:
+                    ask_id = qs.make_query()
+
+                ask_id = int(ask_id)
+                cycle_ask_ids.append(ask_id)
+
+                y_new = oracle.label(active_ds.data[ask_id][0])
+                active_ds.update(ask_id, y_new)
+            ask_log.append({
+                "cycle": cycle,
+                "ask_ids": cycle_ask_ids,
+            })
         wrapper.train(active_ds, verbose=True)
         cycle += 1; asked += k
         _, y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE)
@@ -316,6 +588,12 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                 "seed": int(args.seed),
             }, model_path)
             print(f"✅ NEW BEST (by {args.select_metric}) → {best_sel:.4f}")
+    
+    ask_log_path = Path(args.model_path).with_suffix(".asklog.json")
+    with open(ask_log_path, "w") as f:
+        json.dump(ask_log, f, indent=2)
+
+    print(f"📝 Ask log saved to: {ask_log_path}")  
     return model_path
 
 # === MAIN LOOP ===
@@ -386,8 +664,8 @@ if __name__ == "__main__":
         print("🔍 Evaluating initial model (cycle 0)...")
         X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
         yv_t, yv_p = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
-        emb_dbg = wrapper.extract_embeddings(X_val[:32])
-        print(f"🧩 Embeddings debug: {emb_dbg.shape}")
+        # emb_dbg = wrapper.extract_embeddings(X_val[:32])
+        # print(f"🧩 Embeddings debug: {emb_dbg.shape}")
 
         acc0 = accuracy_score(y_val, yv_p)
         f10 = f1_score(y_val, yv_p, average='macro')
@@ -472,4 +750,4 @@ if __name__ == "__main__":
     
     metrics["seed"] = int(args.seed)
     save_metrics_to_csv(metrics, RESULTS_PATH)
-    print(f"💾 Metrics saved to: {RESULTS_PATH}")    
+    print(f"💾 Metrics saved to: {RESULTS_PATH}")
