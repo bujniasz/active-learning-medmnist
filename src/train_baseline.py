@@ -44,11 +44,13 @@ def parse_args():
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
     p.add_argument("-r", "--results-path", type=str, default=None, 
                         help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
-    p.add_argument("--select-metric", type=str, default="acc",
-                        choices=["acc", "f1", "auc", "ap"],
-                        help="Metric used to select the best checkpoint")
+    p.add_argument("--select-metric", type=str, default="mean",
+                        choices=["mean", "acc", "f1", "auc", "ap"],
+                        help="Metric used to select the best checkpoint (mean = average of acc,f1,auc,ap)")
+    p.add_argument("--select-delta", type=float, default=1e-4,
+                    help="Minimum improvement required to save a new best checkpoint")
     p.add_argument("--batch-size", type=int, default=64, help="Batch size for training")
-    p.add_argument("--epochs", type=int, default=1, help="Number of training epochs")
+    p.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -130,11 +132,25 @@ def run_supervised_loop(model, train_loader, val_loader, *,
         val_f1  = f1_score(yv_true, yv_pred, average='macro')
         val_auc = roc_auc_score(yv_true, yv_proba) if yv_proba is not None else float('nan')
         val_ap  = average_precision_score(yv_true, yv_proba) if yv_proba is not None else float('nan')
-        print(f"Epoch [{epoch+1}/{epochs}] - Loss: {avg_train_loss:.4f} - Train Acc: {train_acc:.4f} "
-              f"- Val acc={val_acc:.4f} Val f1={val_f1:.4f} Val auc={val_auc:.4f} Val ap={val_ap:.4f}")
+        
+        # mean score over all metrics (ignore NaNs, e.g. if AUC/AP undefined)
+        vals = np.array([val_acc, val_f1, val_auc, val_ap], dtype=float)
+        val_mean = float(np.nanmean(vals))
+        if np.isnan(val_mean):
+            val_mean = float("-inf")
 
-        sel = {"acc": val_acc, "f1": val_f1, "auc": val_auc, "ap": val_ap}[select_metric]
-        if sel >= best_sel:
+        print(f"Epoch [{epoch+1}/{epochs}] - Loss: {avg_train_loss:.4f} - Train Acc: {train_acc:.4f} "
+        f"- Val acc={val_acc:.4f} Val f1={val_f1:.4f} Val auc={val_auc:.4f} Val ap={val_ap:.4f} "
+        f"Val mean={val_mean:.4f}")
+
+        sel_map = {"mean": val_mean, "acc": val_acc, "f1": val_f1, "auc": val_auc, "ap": val_ap}
+        sel = float(sel_map[select_metric])
+
+        if np.isnan(sel):
+            sel = float("-inf")
+
+        delta = getattr(args, "select_delta", 0.0)  
+        if sel > best_sel + delta:
             best_sel = sel
             torch.save({
                 'model_state_dict': model.state_dict(),
@@ -145,6 +161,7 @@ def run_supervised_loop(model, train_loader, val_loader, *,
                 'val_f1': float(val_f1),
                 'val_auc': float(val_auc),
                 'val_ap': float(val_ap),
+                'val_mean': float(val_mean),
                 'select_metric': select_metric,
                 'best_metric': float(sel),
                 'best_epoch': int(epoch + 1),

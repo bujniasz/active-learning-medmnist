@@ -347,7 +347,11 @@ def parse_args():
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
-    p.add_argument("--select-metric", type=str, default="acc", choices=["acc", "f1", "auc", "ap"])
+    p.add_argument("--select-metric", type=str, default="mean",
+                        choices=["mean", "acc", "f1", "auc", "ap"],
+                        help="Metric used to select the best checkpoint (mean = average of acc,f1,auc,ap)")
+    p.add_argument("--select-delta", type=float, default=1e-4,
+                    help="Minimum improvement required to save a new best checkpoint")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--strategy", type=str, default="uncertainty", choices=["uncertainty", "random", "mc_entropy", "mc_bald", "mc_entropy_diverse", "mc_bald_diverse", "entropy_diverse", "egl_fc"], help="Query strategy")
     p.add_argument("--mc-T", type=int, default=10, help="Number of MC Dropout forward passes")
@@ -567,10 +571,21 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
             proba = wrapper.predict_proba(X_val)[:, 1]
             auc = roc_auc_score(y_val, proba)
             ap = average_precision_score(y_val, proba)
+        # mean score over all metrics (ignore NaNs, e.g. if AUC/AP undefined)
+        vals = np.array([acc, f1, auc, ap], dtype=float)
+        val_mean = float(np.nanmean(vals))
+        if np.isnan(val_mean):
+            val_mean = float("-inf")    
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
-        print(f"[cycle {cycle}/{int(budget / batch)}] labeled={labeled_cnt} val_acc={acc:.4f} val_f1={f1:.4f} val_auc={auc:.4f} val_ap={ap:.4f}")
-        sel = {"acc": acc, "f1": f1, "auc": auc, "ap": ap}[select_metric]
-        if sel > best_sel:
+        print(f"[cycle {cycle}/{int(budget / batch)}] labeled={labeled_cnt} val_acc={acc:.4f} val_f1={f1:.4f} val_auc={auc:.4f} val_ap={ap:.4f} val_mean={val_mean:.4f}")
+        sel_map = {"mean": val_mean, "acc": acc, "f1": f1, "auc": auc, "ap": ap}
+        sel = float(sel_map[select_metric])
+
+        if np.isnan(sel):
+            sel = float("-inf")
+
+        delta = getattr(args, "select_delta", 0.0)  
+        if sel > best_sel + delta:
             best_sel = sel
             torch.save({
                 "model_state_dict": wrapper.model.state_dict(),
@@ -581,6 +596,7 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                 "val_f1": float(f1),
                 "val_auc": float(auc),
                 "val_ap": float(ap),
+                "val_mean": float(val_mean),
                 "select_metric": select_metric,
                 "best_metric": float(sel),
                 "best_cycle": int(cycle),
@@ -678,15 +694,21 @@ if __name__ == "__main__":
             auc0 = roc_auc_score(y_val, proba0)
             ap0 = average_precision_score(y_val, proba0)
 
+        vals0 = np.array([acc0, f10, auc0, ap0], dtype=float)
+        mean0 = float(np.nanmean(vals0))
+        if np.isnan(mean0):
+            mean0 = float("-inf")
+
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
         print(
             f"[cycle 0] labeled={labeled_cnt} "
             f"val_acc={acc0:.4f} val_f1={f10:.4f} "
-            f"val_auc={auc0:.4f} val_ap={ap0:.4f}"
+            f"val_auc={auc0:.4f} val_ap={ap0:.4f} "
+            f"val_mean={mean0:.4f}"
         )
 
         # === OPTIONAL: Save cycle-0 model as current best ===
-        best_sel = {"acc": acc0, "f1": f10, "auc": auc0, "ap": ap0}[args.select_metric]
+        best_sel = {"mean": mean0, "acc": acc0, "f1": f10, "auc": auc0, "ap": ap0}[args.select_metric]
         torch.save({
             "model_state_dict": wrapper.model.state_dict(),
             "in_channels": wrapper.in_channels,
@@ -696,6 +718,7 @@ if __name__ == "__main__":
             "val_f1": float(f10),
             "val_auc": float(auc0),
             "val_ap": float(ap0),
+            "val_mean": float(mean0),
             "select_metric": args.select_metric,
             "best_metric": float(best_sel),
             "best_cycle": 0,
@@ -726,6 +749,7 @@ if __name__ == "__main__":
                 f"val_f1={_ckpt.get('val_f1','?'):.4f}, "
                 f"val_auc={_ckpt.get('val_auc','?'):.4f}, "
                 f"val_ap={_ckpt.get('val_ap','?'):.4f} "
+                f"val_mean={_ckpt.get('val_mean','?'):.4f} "
                 f"[select_metric={_ckpt.get('select_metric','?')}, "
                 f"best_metric={_ckpt.get('best_metric','?'):.4f}]")
 
