@@ -6,6 +6,7 @@ import argparse
 import random
 from pathlib import Path
 import json
+import csv
 
 # Torch
 import torch
@@ -29,6 +30,43 @@ from metrics import get_predictions, evaluate_predictions, save_metrics_to_csv
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# === CSV ===
+def fmt(x, ndigits=4):
+    """
+    Format metric value to fixed number of decimal places.
+    Returns empty string for NaN / None.
+    """
+    try:
+        if x is None or np.isnan(x):
+            return ""
+        return round(float(x), ndigits)
+    except Exception:
+        return ""
+    
+def append_row_to_csv(row: dict, csv_path: str):
+    # ensure results dir exists
+    out_dir = os.path.dirname(csv_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    fieldnames = [
+        "dataset", "phase", "strategy", "seed", "model",
+        "step_type", "step", "labeled_count", "split",
+        "acc", "f1_macro", "auc", "ap",
+        "val_mean", "select_metric", "is_best",
+    ]
+
+    file_exists = os.path.isfile(csv_path)
+
+    # fill missing keys
+    for k in fieldnames:
+        row.setdefault(k, "")
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            w.writeheader()
+        w.writerow(row)
 
 # def predictive_entropy(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 #     """
@@ -85,7 +123,6 @@ def k_center_greedy(emb: np.ndarray, k: int, seed: int = 42, first: int | None =
         d = np.minimum(d, np.linalg.norm(emb - emb[nxt], axis=1))
 
     return selected
-
 
 def egl_fc_score(emb: np.ndarray, probs: np.ndarray) -> np.ndarray:
     """
@@ -339,7 +376,7 @@ def parse_args():
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
-    p.add_argument("-r", "--results-path", type=str, default=None,
+    p.add_argument("-r", "--results-path", type=str, default="results/test-exps.csv",
                help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
     p.add_argument("--init-size", type=int, default=500)
     p.add_argument("--budget", type=int, default=30)
@@ -584,7 +621,29 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
         if np.isnan(sel):
             sel = float("-inf")
 
-        delta = getattr(args, "select_delta", 0.0)  
+        delta = getattr(args, "select_delta", 0.0)
+        is_best = 1 if (sel > best_sel + delta) else 0
+        append_row_to_csv({
+            "dataset": os.path.basename(os.path.normpath(data_dir)) if data_dir else "",
+            "phase": "active",
+            "strategy": args.strategy,
+            "seed": int(args.seed),
+            "model": os.path.basename(os.path.normpath(model_path)),
+
+            "step_type": "cycle",
+            "step": int(cycle),                 # UWAGA: u Ciebie cycle jest inkrementowany wcześniej; patrz niżej
+            "labeled_count": int(labeled_cnt),
+            "split": "val",
+
+            "acc": fmt(acc),
+            "f1_macro": fmt(f1),
+            "auc": fmt(auc),
+            "ap": fmt(ap),
+
+            "val_mean": fmt(val_mean),
+            "select_metric": select_metric,
+            "is_best": int(is_best),
+        }, RESULTS_PATH)  
         if sel > best_sel + delta:
             best_sel = sel
             torch.save({
@@ -592,6 +651,10 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                 "in_channels": wrapper.in_channels,
                 "num_classes": wrapper.num_classes,
                 "data_dir": data_dir,
+                "strategy": args.strategy,
+                "init_size": int(args.init_size),
+                "batch": int(args.batch),
+                "budget": int(args.budget),
                 "val_acc": float(acc),
                 "val_f1": float(f1),
                 "val_auc": float(auc),
@@ -707,6 +770,28 @@ if __name__ == "__main__":
             f"val_mean={mean0:.4f}"
         )
 
+        append_row_to_csv({
+            "dataset": os.path.basename(os.path.normpath(args.data_dir)),
+            "phase": "active",
+            "strategy": args.strategy,
+            "seed": int(args.seed),
+            "model": os.path.basename(os.path.normpath(args.model_path)),
+
+            "step_type": "cycle",
+            "step": 0,
+            "labeled_count": int(labeled_cnt),
+            "split": "val",
+
+            "acc": fmt(acc0),
+            "f1_macro": fmt(f10),
+            "auc": fmt(auc0),
+            "ap": fmt(ap0),
+
+            "val_mean": fmt(mean0),
+            "select_metric": args.select_metric,
+            "is_best": 1,
+        }, RESULTS_PATH)
+
         # === OPTIONAL: Save cycle-0 model as current best ===
         best_sel = {"mean": mean0, "acc": acc0, "f1": f10, "auc": auc0, "ap": ap0}[args.select_metric]
         torch.save({
@@ -714,6 +799,10 @@ if __name__ == "__main__":
             "in_channels": wrapper.in_channels,
             "num_classes": wrapper.num_classes,
             "data_dir": args.data_dir,
+            "strategy": args.strategy,
+            "init_size": int(args.init_size),
+            "batch": int(args.batch),
+            "budget": int(args.budget),
             "val_acc": float(acc0),
             "val_f1": float(f10),
             "val_auc": float(auc0),
@@ -772,6 +861,29 @@ if __name__ == "__main__":
         f"ap={metrics.get('ap', float('nan')):.4f} "
         f"(ckpt: {args.model_path})")
     
-    metrics["seed"] = int(args.seed)
-    save_metrics_to_csv(metrics, RESULTS_PATH)
-    print(f"💾 Metrics saved to: {RESULTS_PATH}")
+    if not args.eval_only:
+        append_row_to_csv({
+            "dataset": os.path.basename(os.path.normpath(args.data_dir)),
+            "phase": "active",
+            "strategy": args.strategy,
+            "seed": int(args.seed),
+            "model": os.path.basename(os.path.normpath(args.model_path)),
+
+            "step_type": "final",
+            "step": -1,
+            "labeled_count": _ckpt.get("labeled_count", ""),
+            "split": "test",
+
+            "acc": fmt(metrics.get("accuracy")),
+            "f1_macro": fmt(metrics.get("f1_macro")),
+            "auc": fmt(metrics.get("auc")),
+            "ap": fmt(metrics.get("ap")),
+
+            "val_mean": "",
+            "select_metric": _ckpt.get("select_metric", args.select_metric),
+            "is_best": -1,
+        }, RESULTS_PATH)
+
+    # metrics["seed"] = int(args.seed)
+    # save_metrics_to_csv(metrics, RESULTS_PATH)
+    # print(f"💾 Metrics saved to: {RESULTS_PATH}")

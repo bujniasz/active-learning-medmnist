@@ -4,6 +4,7 @@ import os
 import argparse
 import random
 import numpy as np
+import csv
 
 # Torch
 import torch
@@ -42,7 +43,7 @@ def parse_args():
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
-    p.add_argument("-r", "--results-path", type=str, default=None, 
+    p.add_argument("-r", "--results-path", type=str, default="results/test-exps.csv", 
                         help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
     p.add_argument("--select-metric", type=str, default="mean",
                         choices=["mean", "acc", "f1", "auc", "ap"],
@@ -79,6 +80,44 @@ def set_seed(seed: int = 42):
         print(f"[WARN] torch.use_deterministic_algorithms(True) not supported: {e}")
 
     os.environ["PYTHONHASHSEED"] = str(seed)
+
+# === CSV ===
+def fmt(x, ndigits=4):
+    """
+    Format metric value to fixed number of decimal places.
+    Returns empty string for NaN / None.
+    """
+    try:
+        if x is None or np.isnan(x):
+            return ""
+        return round(float(x), ndigits)
+    except Exception:
+        return ""
+    
+def append_row_to_csv(row: dict, csv_path: str):
+    # ensure results dir exists
+    out_dir = os.path.dirname(csv_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    fieldnames = [
+        "dataset", "phase", "strategy", "seed", "model",
+        "step_type", "step", "labeled_count", "split",
+        "acc", "f1_macro", "auc", "ap",
+        "val_mean", "select_metric", "is_best",
+    ]
+
+    file_exists = os.path.isfile(csv_path)
+
+    # fill missing keys
+    for k in fieldnames:
+        row.setdefault(k, "")
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            w.writeheader()
+        w.writerow(row)
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -150,6 +189,29 @@ def run_supervised_loop(model, train_loader, val_loader, *,
             sel = float("-inf")
 
         delta = getattr(args, "select_delta", 0.0)  
+        is_best = 1 if (sel > best_sel + delta) else 0
+        append_row_to_csv({
+            "dataset": os.path.basename(os.path.normpath(data_dir)),
+            "phase": "baseline",
+            "strategy": "supervised",
+            "seed": int(args.seed),
+            "model": os.path.basename(os.path.normpath(model_path)),
+
+            "step_type": "epoch",
+            "step": int(epoch + 1),
+            "labeled_count": int(len(train_loader.dataset)),
+            "split": "val",
+
+            "acc": fmt(val_acc),
+            "f1_macro": fmt(val_f1),
+            "auc": fmt(val_auc),
+            "ap": fmt(val_ap),
+
+            "val_mean": fmt(val_mean),
+            "select_metric": select_metric,
+            "is_best": int(is_best),
+        }, RESULTS_PATH)
+
         if sel > best_sel + delta:
             best_sel = sel
             torch.save({
@@ -157,6 +219,7 @@ def run_supervised_loop(model, train_loader, val_loader, *,
                 'in_channels': in_channels,
                 'num_classes': num_classes,
                 'data_dir': data_dir,
+                'train_size': int(len(train_loader.dataset)),
                 'val_acc': float(val_acc),
                 'val_f1': float(val_f1),
                 'val_auc': float(val_auc),
@@ -255,6 +318,30 @@ if __name__ == "__main__":
         f"auc={metrics.get('auc', float('nan')):.4f} "
         f"ap={metrics.get('ap', float('nan')):.4f} "
         f"(ckpt: {args.model_path})")
-    
-    metrics["seed"] = int(args.seed)
-    save_metrics_to_csv(metrics, RESULTS_PATH)
+
+    if not args.eval_only:
+        append_row_to_csv({
+            "dataset": os.path.basename(os.path.normpath(DATA_DIR)),
+            "phase": "baseline",
+            "strategy": "supervised",
+            "seed": int(args.seed),
+            "model": os.path.basename(os.path.normpath(args.model_path)),
+
+            "step_type": "final",
+            "step": -1,
+            "labeled_count": checkpoint.get("train_size", ""),
+            "split": "test",
+
+            "acc": fmt(metrics.get("accuracy")),
+            "f1_macro": fmt(metrics.get("f1_macro")),
+            "auc": fmt(metrics.get("auc")),
+            "ap": fmt(metrics.get("ap")),
+
+            "val_mean": "",
+            "select_metric": checkpoint.get("select_metric", args.select_metric),
+            "is_best": -1,
+        }, RESULTS_PATH)
+
+
+    # metrics["seed"] = int(args.seed)
+    # save_metrics_to_csv(metrics, RESULTS_PATH)
