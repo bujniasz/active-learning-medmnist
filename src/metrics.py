@@ -1,5 +1,13 @@
+# === IMPORTS ===
+
+# Torch
 import torch
+from torch.utils.data import DataLoader, TensorDataset
+
+# Numpy
 import numpy as np
+
+# Sklearn
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -8,9 +16,51 @@ from sklearn.metrics import (
     roc_auc_score,
     average_precision_score
 )
+
+# Pandas
 import pandas as pd
+
+# General
 import os
-from torch.utils.data import DataLoader, TensorDataset
+import csv
+
+
+def fmt(x, ndigits=4):
+    """
+    Format metric value to fixed number of decimal places.
+    Returns empty string for NaN / None.
+    """
+    try:
+        if x is None or np.isnan(x):
+            return ""
+        return round(float(x), ndigits)
+    except Exception:
+        return ""
+    
+def append_row_to_csv(row: dict, csv_path: str):
+    # ensure results dir exists
+    out_dir = os.path.dirname(csv_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    fieldnames = [
+        "dataset", "phase", "strategy", "seed", "model",
+        "step_type", "step", "labeled_count", "split",
+        "acc", "f1_macro", "auc", "ap",
+        "val_mean", "select_metric", "is_best",
+    ]
+
+    file_exists = os.path.isfile(csv_path)
+
+    # fill missing keys
+    for k in fieldnames:
+        row.setdefault(k, "")
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            w.writeheader()
+        w.writerow(row)
 
 def get_predictions(model, data, device, batch_size: int = 256):
     """
@@ -50,12 +100,7 @@ def get_predictions(model, data, device, batch_size: int = 256):
 
     return y_true, y_pred
 
-def evaluate_predictions(y_true, y_pred, y_proba=None):
-    metrics = {}
-
-    metrics["accuracy"] = accuracy_score(y_true, y_pred)
-    metrics["f1_macro"] = f1_score(y_true, y_pred, average="macro")
-    metrics["f1_weighted"] = f1_score(y_true, y_pred, average="weighted")
+def class_report_conf_matrix(y_true, y_pred):
 
     print("\n📋 Classification report:")
     print(classification_report(y_true, y_pred, digits=4))
@@ -63,15 +108,7 @@ def evaluate_predictions(y_true, y_pred, y_proba=None):
     cm = confusion_matrix(y_true, y_pred)
     print("📊 Confusion Matrix:")
     print(cm)
-    
-    if y_proba is not None:
-        try:
-            metrics["auc"] = roc_auc_score(y_true, y_proba)
-            metrics["ap"] = average_precision_score(y_true, y_proba)
-        except Exception as e:
-            print(f"evaluate_predictions() - Skipping AUC/AP: {e}")
 
-    return metrics
 
 def save_metrics_to_csv(metrics: dict, path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)

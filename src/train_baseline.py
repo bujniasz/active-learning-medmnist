@@ -4,7 +4,6 @@ import os
 import argparse
 import random
 import numpy as np
-import csv
 
 # Torch
 import torch
@@ -17,7 +16,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_pre
 
 # Custom
 from load_data import prepare_split_baseline
-from metrics import get_predictions, evaluate_predictions, save_metrics_to_csv
+from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_to_csv
 
 """
 train_baseline.py
@@ -44,7 +43,7 @@ def parse_args():
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
     p.add_argument("-r", "--results-path", type=str, default="results/test-exps.csv", 
-                        help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
+                        help="Global CSV log path (appends rows). Default: results/test-exps.csv")
     p.add_argument("--select-metric", type=str, default="mean",
                         choices=["mean", "acc", "f1", "auc", "ap"],
                         help="Metric used to select the best checkpoint (mean = average of acc,f1,auc,ap)")
@@ -80,44 +79,6 @@ def set_seed(seed: int = 42):
         print(f"[WARN] torch.use_deterministic_algorithms(True) not supported: {e}")
 
     os.environ["PYTHONHASHSEED"] = str(seed)
-
-# === CSV ===
-def fmt(x, ndigits=4):
-    """
-    Format metric value to fixed number of decimal places.
-    Returns empty string for NaN / None.
-    """
-    try:
-        if x is None or np.isnan(x):
-            return ""
-        return round(float(x), ndigits)
-    except Exception:
-        return ""
-    
-def append_row_to_csv(row: dict, csv_path: str):
-    # ensure results dir exists
-    out_dir = os.path.dirname(csv_path)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-
-    fieldnames = [
-        "dataset", "phase", "strategy", "seed", "model",
-        "step_type", "step", "labeled_count", "split",
-        "acc", "f1_macro", "auc", "ap",
-        "val_mean", "select_metric", "is_best",
-    ]
-
-    file_exists = os.path.isfile(csv_path)
-
-    # fill missing keys
-    for k in fieldnames:
-        row.setdefault(k, "")
-
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            w.writeheader()
-        w.writerow(row)
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -158,21 +119,21 @@ def run_supervised_loop(model, train_loader, val_loader, *,
 
         # --- val ---
         model.eval()
-        yv_true, yv_pred = get_predictions(model, val_loader, DEVICE)
-        val_acc = accuracy_score(yv_true, yv_pred)
-        yv_proba = None
+        val_y_true, val_y_pred = get_predictions(model, val_loader, DEVICE)
+        val_acc = accuracy_score(val_y_true, val_y_pred)
+        val_y_proba = None
         if getattr(model, "fc", None) is not None and getattr(model.fc, "out_features", None) == 2:
-            yv_proba = []
+            val_y_proba = []
             with torch.inference_mode():
                 for inputs, _ in val_loader:
                     inputs = inputs.to(DEVICE)
                     probs = torch.softmax(model(inputs), dim=1)[:, 1]
-                    yv_proba.extend(probs.detach().cpu().tolist())
-        val_f1  = f1_score(yv_true, yv_pred, average='macro')
-        val_auc = roc_auc_score(yv_true, yv_proba) if yv_proba is not None else float('nan')
-        val_ap  = average_precision_score(yv_true, yv_proba) if yv_proba is not None else float('nan')
+                    val_y_proba.extend(probs.detach().cpu().tolist())
+        val_f1  = f1_score(val_y_true, val_y_pred, average='macro')
+        val_auc = roc_auc_score(val_y_true, val_y_proba) if val_y_proba is not None else float('nan')
+        val_ap  = average_precision_score(val_y_true, val_y_proba) if val_y_proba is not None else float('nan')
         
-        # mean score over all metrics (ignore NaNs, e.g. if AUC/AP undefined)
+        # --- mean score ---
         vals = np.array([val_acc, val_f1, val_auc, val_ap], dtype=float)
         val_mean = float(np.nanmean(vals))
         if np.isnan(val_mean):
@@ -296,12 +257,12 @@ if __name__ == "__main__":
     model.eval()
 
     with torch.inference_mode():
-        y_val_true, y_val_pred = get_predictions(model, val_loader, DEVICE)
-        val_acc_check = accuracy_score(y_val_true, y_val_pred)
-        y_true, y_pred = get_predictions(model, test_loader, DEVICE)
+        val_y_true_check, val_y_pred_check = get_predictions(model, val_loader, DEVICE)
+        val_acc_check = accuracy_score(val_y_true_check, val_y_pred_check)
+        test_y_true, test_y_pred = get_predictions(model, test_loader, DEVICE)
     print(f"📈 Validation check: val_acc = {val_acc_check:.4f}")
 
-    proba = None
+    test_proba = None
     if getattr(model, "fc", None) is not None and getattr(model.fc, "out_features", None) == 2:
         y_proba_list = []
         with torch.inference_mode():
@@ -310,13 +271,26 @@ if __name__ == "__main__":
                 logits = model(inputs)
                 probs = torch.softmax(logits, dim=1)[:, 1]
                 y_proba_list.extend(probs.detach().cpu().tolist())
-        proba = y_proba_list
+        test_proba = y_proba_list
 
-    metrics = evaluate_predictions(y_true, y_pred, y_proba=proba)
-    print(f"[TEST] acc={metrics['accuracy']:.4f} "
-        f"f1={metrics['f1_macro']:.4f} "
-        f"auc={metrics.get('auc', float('nan')):.4f} "
-        f"ap={metrics.get('ap', float('nan')):.4f} "
+    class_report_conf_matrix(test_y_true, test_y_pred)
+
+    test_acc = accuracy_score(test_y_true, test_y_pred)
+    test_f1  = f1_score(test_y_true, test_y_pred, average="macro")
+
+    test_auc = float("nan")
+    test_ap  = float("nan")
+    if test_proba is not None:
+        try:
+            test_auc = roc_auc_score(test_y_true, test_proba)
+            test_ap  = average_precision_score(test_y_true, test_proba)
+        except Exception:
+            pass
+
+    print(f"[TEST] acc={test_acc:.4f} "
+        f"f1={test_f1:.4f} "
+        f"auc={test_auc:.4f} "
+        f"ap={test_ap:.4f} "
         f"(ckpt: {args.model_path})")
 
     if not args.eval_only:
@@ -332,16 +306,12 @@ if __name__ == "__main__":
             "labeled_count": checkpoint.get("train_size", ""),
             "split": "test",
 
-            "acc": fmt(metrics.get("accuracy")),
-            "f1_macro": fmt(metrics.get("f1_macro")),
-            "auc": fmt(metrics.get("auc")),
-            "ap": fmt(metrics.get("ap")),
+            "acc": fmt(test_acc),
+            "f1_macro": fmt(test_f1),
+            "auc": fmt(test_auc),
+            "ap": fmt(test_ap),
 
             "val_mean": "",
             "select_metric": checkpoint.get("select_metric", args.select_metric),
             "is_best": -1,
         }, RESULTS_PATH)
-
-
-    # metrics["seed"] = int(args.seed)
-    # save_metrics_to_csv(metrics, RESULTS_PATH)

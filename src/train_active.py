@@ -6,7 +6,7 @@ import argparse
 import random
 from pathlib import Path
 import json
-import csv
+
 
 # Torch
 import torch
@@ -25,56 +25,10 @@ from libact.base.interfaces import ProbabilisticModel
 
 # Custom
 from load_data import prepare_split_active
-from metrics import get_predictions, evaluate_predictions, save_metrics_to_csv
+from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_to_csv
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# === CSV ===
-def fmt(x, ndigits=4):
-    """
-    Format metric value to fixed number of decimal places.
-    Returns empty string for NaN / None.
-    """
-    try:
-        if x is None or np.isnan(x):
-            return ""
-        return round(float(x), ndigits)
-    except Exception:
-        return ""
-    
-def append_row_to_csv(row: dict, csv_path: str):
-    # ensure results dir exists
-    out_dir = os.path.dirname(csv_path)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-
-    fieldnames = [
-        "dataset", "phase", "strategy", "seed", "model",
-        "step_type", "step", "labeled_count", "split",
-        "acc", "f1_macro", "auc", "ap",
-        "val_mean", "select_metric", "is_best",
-    ]
-
-    file_exists = os.path.isfile(csv_path)
-
-    # fill missing keys
-    for k in fieldnames:
-        row.setdefault(k, "")
-
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            w.writeheader()
-        w.writerow(row)
-
-# def predictive_entropy(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-#     """
-#     probs: (N, C) mean predictive probabilities
-#     returns: (N,) entropy
-#     """
-#     p = np.clip(probs, eps, 1.0)
-#     return -np.sum(p * np.log(p), axis=1)
 
 def entropy_rows(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
@@ -342,7 +296,8 @@ class TorchModelWrapper(ProbabilisticModel):
             for xb, yb in dl:
                 xb, yb = xb.to(DEVICE, non_blocking=True), yb.to(DEVICE, non_blocking=True)
                 self.optimizer.zero_grad()
-                loss = self.loss_fn(self.model(xb), yb)
+                logits = self._forward_logits_with_dropout(xb, enable_dropout=False)
+                loss = self.loss_fn(logits, yb)
                 loss.backward()
                 self.optimizer.step()
                 total_loss += loss.item()
@@ -379,7 +334,7 @@ def parse_args():
     p.add_argument("-r", "--results-path", type=str, default="results/test-exps.csv",
                help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
     p.add_argument("--init-size", type=int, default=500)
-    p.add_argument("--budget", type=int, default=30)
+    p.add_argument("--budget", type=int, default=20)
     p.add_argument("--batch", type=int, default=10, help="queries per AL cycle")
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
@@ -491,7 +446,7 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrap
     return active_ds, oracle, qs, init_idx
 
 # === TRAINING + VALIDATION LOOP === 
-def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
+def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
                         budget: int, batch: int, model_path: str,
                         select_metric: str = "acc",
                         data_dir: str | None = None) -> str:
@@ -536,7 +491,7 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
             ask_ids = [int(unlabeled_ids[int(j)]) for j in batch_local]
 
             ask_log.append({
-                "cycle": cycle,
+                "cycle": cycle+1,
                 "ask_ids": ask_ids,
             })
 
@@ -577,10 +532,10 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
 
                     if args.strategy == "mc_entropy":
                         probs = wrapper.mc_predict_proba(X_u, T=args.mc_T, base_seed=mc_seed)
-                        scores = entropy_rows(probs)  # (N,)
-                    else:  # mc_bald
+                        scores = entropy_rows(probs)
+                    else:
                         probs_T = wrapper.mc_predict_proba_T(X_u, T=args.mc_T, base_seed=mc_seed)
-                        scores = bald_score(probs_T)  # (N,)
+                        scores = bald_score(probs_T)
 
                     pick_local = int(np.argmax(scores))
                     ask_id = int(unlabeled_ids[pick_local])
@@ -596,26 +551,31 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                 "cycle": cycle,
                 "ask_ids": cycle_ask_ids,
             })
+
         wrapper.train(active_ds, verbose=True)
         cycle += 1; asked += k
-        _, y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE)
-        acc = accuracy_score(y_val, y_pred)
-        f1 = f1_score(y_val, y_pred, average='macro')
-        proba = None
-        auc = float("nan")
-        ap = float("nan")
+
+        _, val_y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE)
+
+        val_acc = accuracy_score(y_val, val_y_pred)
+        val_f1 = f1_score(y_val, val_y_pred, average='macro')
+        val_proba = None
+        val_auc = float("nan")
+        val_ap = float("nan")
         if wrapper.num_classes == 2:
-            proba = wrapper.predict_proba(X_val)[:, 1]
-            auc = roc_auc_score(y_val, proba)
-            ap = average_precision_score(y_val, proba)
-        # mean score over all metrics (ignore NaNs, e.g. if AUC/AP undefined)
-        vals = np.array([acc, f1, auc, ap], dtype=float)
+            val_proba = wrapper.predict_proba(X_val)[:, 1]
+            val_auc = roc_auc_score(y_val, val_proba)
+            val_ap = average_precision_score(y_val, val_proba)
+
+        vals = np.array([val_acc, val_f1, val_auc, val_ap], dtype=float)
         val_mean = float(np.nanmean(vals))
         if np.isnan(val_mean):
-            val_mean = float("-inf")    
+            val_mean = float("-inf")
+
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
-        print(f"[cycle {cycle}/{int(budget / batch)}] labeled={labeled_cnt} val_acc={acc:.4f} val_f1={f1:.4f} val_auc={auc:.4f} val_ap={ap:.4f} val_mean={val_mean:.4f}")
-        sel_map = {"mean": val_mean, "acc": acc, "f1": f1, "auc": auc, "ap": ap}
+        print(f"[cycle {cycle}/{int(budget / batch)}] "
+              f"labeled={labeled_cnt} val_acc={val_acc:.4f} val_f1={val_f1:.4f} val_auc={val_auc:.4f} val_ap={val_ap:.4f} val_mean={val_mean:.4f}")
+        sel_map = {"mean": val_mean, "acc": val_acc, "f1": val_f1, "auc": val_auc, "ap": val_ap}
         sel = float(sel_map[select_metric])
 
         if np.isnan(sel):
@@ -631,14 +591,14 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
             "model": os.path.basename(os.path.normpath(model_path)),
 
             "step_type": "cycle",
-            "step": int(cycle),                 # UWAGA: u Ciebie cycle jest inkrementowany wcześniej; patrz niżej
+            "step": int(cycle),
             "labeled_count": int(labeled_cnt),
             "split": "val",
 
-            "acc": fmt(acc),
-            "f1_macro": fmt(f1),
-            "auc": fmt(auc),
-            "ap": fmt(ap),
+            "acc": fmt(val_acc),
+            "f1_macro": fmt(val_f1),
+            "auc": fmt(val_auc),
+            "ap": fmt(val_ap),
 
             "val_mean": fmt(val_mean),
             "select_metric": select_metric,
@@ -655,10 +615,10 @@ def run_budget_loop_val(active_ds, oracle, qs, wrapper, X_val, y_val,
                 "init_size": int(args.init_size),
                 "batch": int(args.batch),
                 "budget": int(args.budget),
-                "val_acc": float(acc),
-                "val_f1": float(f1),
-                "val_auc": float(auc),
-                "val_ap": float(ap),
+                "val_acc": float(val_acc),
+                "val_f1": float(val_f1),
+                "val_auc": float(val_auc),
+                "val_ap": float(val_ap),
                 "val_mean": float(val_mean),
                 "select_metric": select_metric,
                 "best_metric": float(sel),
@@ -734,40 +694,35 @@ if __name__ == "__main__":
             f"Strategy = {args.strategy}"
         )
 
-        ### FIRST TRAINING BEFORE ANOTATIONS
-        #wrapper.train(active_ds)
+        # First training (before anotations)
         print("\n🔸 Initial training on starting labeled set")
         wrapper.train(active_ds, verbose=True)
 
-        # === Initial evaluation (cycle 0) ===
-        print("🔍 Evaluating initial model (cycle 0)...")
         X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
-        yv_t, yv_p = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
-        # emb_dbg = wrapper.extract_embeddings(X_val[:32])
-        # print(f"🧩 Embeddings debug: {emb_dbg.shape}")
+        _, val_y_pred = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
 
-        acc0 = accuracy_score(y_val, yv_p)
-        f10 = f1_score(y_val, yv_p, average='macro')
+        start_val_acc = accuracy_score(y_val, val_y_pred)
+        start_val_f1 = f1_score(y_val, val_y_pred, average='macro')
 
-        proba0 = None
-        auc0 = float("nan")
-        ap0 = float("nan")
+        start_val_proba = None
+        start_val_auc = float("nan")
+        start_val_ap = float("nan")
         if wrapper.num_classes == 2:
-            proba0 = wrapper.predict_proba(X_val)[:, 1]
-            auc0 = roc_auc_score(y_val, proba0)
-            ap0 = average_precision_score(y_val, proba0)
+            start_val_proba = wrapper.predict_proba(X_val)[:, 1]
+            start_val_auc = roc_auc_score(y_val, start_val_proba)
+            start_val_ap = average_precision_score(y_val, start_val_proba)
 
-        vals0 = np.array([acc0, f10, auc0, ap0], dtype=float)
-        mean0 = float(np.nanmean(vals0))
-        if np.isnan(mean0):
-            mean0 = float("-inf")
+        start_vals = np.array([start_val_acc, start_val_f1, start_val_auc, start_val_ap], dtype=float)
+        start_mean = float(np.nanmean(start_vals))
+        if np.isnan(start_mean):
+            start_mean = float("-inf")
 
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
         print(
             f"[cycle 0] labeled={labeled_cnt} "
-            f"val_acc={acc0:.4f} val_f1={f10:.4f} "
-            f"val_auc={auc0:.4f} val_ap={ap0:.4f} "
-            f"val_mean={mean0:.4f}"
+            f"val_acc={start_val_acc:.4f} val_f1={start_val_f1:.4f} "
+            f"val_auc={start_val_auc:.4f} val_ap={start_val_ap:.4f} "
+            f"val_mean={start_mean:.4f}"
         )
 
         append_row_to_csv({
@@ -782,18 +737,17 @@ if __name__ == "__main__":
             "labeled_count": int(labeled_cnt),
             "split": "val",
 
-            "acc": fmt(acc0),
-            "f1_macro": fmt(f10),
-            "auc": fmt(auc0),
-            "ap": fmt(ap0),
+            "acc": fmt(start_val_acc),
+            "f1_macro": fmt(start_val_f1),
+            "auc": fmt(start_val_auc),
+            "ap": fmt(start_val_ap),
 
-            "val_mean": fmt(mean0),
+            "val_mean": fmt(start_mean),
             "select_metric": args.select_metric,
             "is_best": 1,
         }, RESULTS_PATH)
 
-        # === OPTIONAL: Save cycle-0 model as current best ===
-        best_sel = {"mean": mean0, "acc": acc0, "f1": f10, "auc": auc0, "ap": ap0}[args.select_metric]
+        best_sel = {"mean": start_mean, "acc": start_val_acc, "f1": start_val_f1, "auc": start_val_auc, "ap": start_val_ap}[args.select_metric]
         torch.save({
             "model_state_dict": wrapper.model.state_dict(),
             "in_channels": wrapper.in_channels,
@@ -803,11 +757,11 @@ if __name__ == "__main__":
             "init_size": int(args.init_size),
             "batch": int(args.batch),
             "budget": int(args.budget),
-            "val_acc": float(acc0),
-            "val_f1": float(f10),
-            "val_auc": float(auc0),
-            "val_ap": float(ap0),
-            "val_mean": float(mean0),
+            "val_acc": float(start_val_acc),
+            "val_f1": float(start_val_f1),
+            "val_auc": float(start_val_auc),
+            "val_ap": float(start_val_ap),
+            "val_mean": float(start_mean),
             "select_metric": args.select_metric,
             "best_metric": float(best_sel),
             "best_cycle": 0,
@@ -817,8 +771,7 @@ if __name__ == "__main__":
         print(f"💾 Saved initial (cycle 0) model → {args.model_path}")
 
         # Validation
-        #X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
-        best_ckpt = run_budget_loop_val(active_ds, oracle, qs, wrapper,
+        best_ckpt = run_active_loop(active_ds, oracle, qs, wrapper,
                                     X_val, y_val,
                                     budget=args.budget, batch=args.batch,
                                     model_path=args.model_path,
@@ -827,40 +780,53 @@ if __name__ == "__main__":
 
         # Test
         X_test, y_test, _, _ = prepare_split_active(args.data_dir, split="test", to_nchw=True)
-        _ckpt = torch.load(best_ckpt, map_location=DEVICE)
-        if isinstance(_ckpt, dict) and "model_state_dict" in _ckpt:
-            wrapper.model.load_state_dict(_ckpt["model_state_dict"])
+        checkpoint = torch.load(best_ckpt, map_location=DEVICE)
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+            wrapper.model.load_state_dict(checkpoint["model_state_dict"])
 
-        if isinstance(_ckpt, dict) and "best_cycle" in _ckpt:
-            print(f"🏁 Best checkpoint from cycle {_ckpt['best_cycle']} "
-                f"(labeled={_ckpt.get('labeled_count','?')}), "
-                f"val_acc={_ckpt.get('val_acc','?'):.4f}, "
-                f"val_f1={_ckpt.get('val_f1','?'):.4f}, "
-                f"val_auc={_ckpt.get('val_auc','?'):.4f}, "
-                f"val_ap={_ckpt.get('val_ap','?'):.4f} "
-                f"val_mean={_ckpt.get('val_mean','?'):.4f} "
-                f"[select_metric={_ckpt.get('select_metric','?')}, "
-                f"best_metric={_ckpt.get('best_metric','?'):.4f}]")
+        if isinstance(checkpoint, dict) and "best_cycle" in checkpoint:
+            print(f"🏁 Best checkpoint from cycle {checkpoint['best_cycle']} "
+                f"(labeled={checkpoint.get('labeled_count','?')}), "
+                f"val_acc={checkpoint.get('val_acc','?'):.4f}, "
+                f"val_f1={checkpoint.get('val_f1','?'):.4f}, "
+                f"val_auc={checkpoint.get('val_auc','?'):.4f}, "
+                f"val_ap={checkpoint.get('val_ap','?'):.4f} "
+                f"val_mean={checkpoint.get('val_mean','?'):.4f} "
+                f"[select_metric={checkpoint.get('select_metric','?')}, "
+                f"best_metric={checkpoint.get('best_metric','?'):.4f}]")
 
     print(f"📦 MODEL NAME: {args.model_path}")
     wrapper.model.eval()
 
     #val double check
-    yv_t, yv_p = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
-    val_acc_check = accuracy_score(yv_t, yv_p)
+    val_y_true_check, val_y_pred_check = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
+    val_acc_check = accuracy_score(val_y_true_check, val_y_pred_check)
     print(f"VAL ACC DOUBLE CHECK = {val_acc_check:.4f}")
 
     with torch.inference_mode():
-        y_true, y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE)
-        proba = wrapper.predict_proba(X_test)[:, 1] if getattr(wrapper, "num_classes", None) == 2 else None
+        _, test_y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE)
+        test_proba = wrapper.predict_proba(X_test)[:, 1] if getattr(wrapper, "num_classes", None) == 2 else None
     
-    metrics = evaluate_predictions(y_true, y_pred, y_proba=proba)
-    print(f"[TEST] acc={metrics['accuracy']:.4f} "
-        f"f1={metrics['f1_macro']:.4f} "
-        f"auc={metrics.get('auc', float('nan')):.4f} "
-        f"ap={metrics.get('ap', float('nan')):.4f} "
+    class_report_conf_matrix(y_test, test_y_pred)
+
+    test_acc = accuracy_score(y_test, test_y_pred)
+    test_f1  = f1_score(y_test, test_y_pred, average="macro")
+
+    test_auc = float("nan")
+    test_ap  = float("nan")
+    if test_proba is not None:
+        try:
+            test_auc = roc_auc_score(y_test, test_proba)
+            test_ap  = average_precision_score(y_test, test_proba)
+        except Exception:
+            pass
+
+    print(f"[TEST] acc={test_acc:.4f} "
+        f"f1={test_f1:.4f} "
+        f"auc={test_auc:.4f} "
+        f"ap={test_ap:.4f} "
         f"(ckpt: {args.model_path})")
-    
+
     if not args.eval_only:
         append_row_to_csv({
             "dataset": os.path.basename(os.path.normpath(args.data_dir)),
@@ -871,19 +837,15 @@ if __name__ == "__main__":
 
             "step_type": "final",
             "step": -1,
-            "labeled_count": _ckpt.get("labeled_count", ""),
+            "labeled_count": checkpoint.get("labeled_count", ""),
             "split": "test",
 
-            "acc": fmt(metrics.get("accuracy")),
-            "f1_macro": fmt(metrics.get("f1_macro")),
-            "auc": fmt(metrics.get("auc")),
-            "ap": fmt(metrics.get("ap")),
+            "acc": fmt(test_acc),
+            "f1_macro": fmt(test_f1),
+            "auc": fmt(test_auc),
+            "ap": fmt(test_ap),
 
             "val_mean": "",
-            "select_metric": _ckpt.get("select_metric", args.select_metric),
+            "select_metric": checkpoint.get("select_metric", args.select_metric),
             "is_best": -1,
         }, RESULTS_PATH)
-
-    # metrics["seed"] = int(args.seed)
-    # save_metrics_to_csv(metrics, RESULTS_PATH)
-    # print(f"💾 Metrics saved to: {RESULTS_PATH}")
