@@ -4,6 +4,7 @@ import os
 import argparse
 import random
 import numpy as np
+from typing import Literal
 
 # Torch
 import torch
@@ -16,7 +17,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_pre
 
 # Custom
 from load_data import prepare_split_baseline
-from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_to_csv
+from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
 
 """
 train_baseline.py
@@ -54,6 +55,53 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
+# class ResNet18EmbedDropout(nn.Module):
+#     def __init__(self, in_channels: int, num_classes: int, dropout_p: float = 0.2):
+#         super().__init__()
+#         self.backbone = resnet18(weights=ResNet18_Weights.DEFAULT)
+#         if in_channels != 3:
+#             self.backbone.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+
+#         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
+#         self.dropout = nn.Dropout(p=dropout_p)
+
+#     def forward(
+#         self,
+#         x: torch.Tensor,
+#         *,
+#         backbone_mode: Literal["train", "eval"] = "train",
+#         enable_dropout: bool = True,
+#     ) -> torch.Tensor:
+
+#         if backbone_mode == "train":
+#             self.backbone.train()
+#         else:
+#             self.backbone.eval()
+
+#         if enable_dropout:
+#             self.dropout.train()
+#         else:
+#             self.dropout.eval()
+
+#         b = self.backbone
+
+#         x = b.conv1(x)
+#         x = b.bn1(x)
+#         x = b.relu(x)
+#         x = b.maxpool(x)
+
+#         x = b.layer1(x)
+#         x = b.layer2(x)
+#         x = b.layer3(x)
+#         x = b.layer4(x)
+
+#         x = b.avgpool(x)
+#         x = torch.flatten(x, 1)  # (N, 512)
+
+#         x = self.dropout(x)
+#         logits = b.fc(x)
+#         return logits
+
 # === SEED ===
 def set_seed(seed: int = 42):
     random.seed(seed)
@@ -84,12 +132,17 @@ def set_seed(seed: int = 42):
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # === MODEL BUILDER ===
-def get_model(num_classes, in_channels):
-    model = resnet18(weights=ResNet18_Weights.DEFAULT)
-    if in_channels != 3:
-        model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-    return model
+def get_model(num_classes, in_channels, dropout_p: float = 0.2):
+    return ResNet18EmbedDropout(in_channels=in_channels, num_classes=num_classes, dropout_p=dropout_p)
+
+def get_num_classes(model) -> int | None:
+    # plain resnet
+    if hasattr(model, "fc") and hasattr(model.fc, "out_features"):
+        return int(model.fc.out_features)
+    # your wrapper model
+    if hasattr(model, "backbone") and hasattr(model.backbone, "fc") and hasattr(model.backbone.fc, "out_features"):
+        return int(model.backbone.fc.out_features)
+    return None
 
 # === TRAINING + VALIDATION LOOP === 
 def run_supervised_loop(model, train_loader, val_loader, *,
@@ -107,7 +160,7 @@ def run_supervised_loop(model, train_loader, val_loader, *,
         for inputs, targets in train_loader:
             inputs, targets = inputs.to(DEVICE), targets.to(DEVICE)
             optimizer.zero_grad()
-            outputs = model(inputs)
+            outputs = model(inputs, backbone_mode="train", enable_dropout=True)
             loss = criterion(outputs, targets)
             loss.backward()
             optimizer.step()
@@ -119,15 +172,15 @@ def run_supervised_loop(model, train_loader, val_loader, *,
 
         # --- val ---
         model.eval()
-        val_y_true, val_y_pred = get_predictions(model, val_loader, DEVICE)
+        val_y_true, val_y_pred = get_predictions(model, val_loader, DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
         val_acc = accuracy_score(val_y_true, val_y_pred)
         val_y_proba = None
-        if getattr(model, "fc", None) is not None and getattr(model.fc, "out_features", None) == 2:
+        if get_num_classes(model) == 2:
             val_y_proba = []
             with torch.inference_mode():
                 for inputs, _ in val_loader:
                     inputs = inputs.to(DEVICE)
-                    probs = torch.softmax(model(inputs), dim=1)[:, 1]
+                    probs = torch.softmax(model(inputs, backbone_mode="eval", enable_dropout=False), dim=1)[:, 1]
                     val_y_proba.extend(probs.detach().cpu().tolist())
         val_f1  = f1_score(val_y_true, val_y_pred, average='macro')
         val_auc = roc_auc_score(val_y_true, val_y_proba) if val_y_proba is not None else float('nan')
@@ -257,18 +310,18 @@ if __name__ == "__main__":
     model.eval()
 
     with torch.inference_mode():
-        val_y_true_check, val_y_pred_check = get_predictions(model, val_loader, DEVICE)
+        val_y_true_check, val_y_pred_check = get_predictions(model, val_loader, DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
         val_acc_check = accuracy_score(val_y_true_check, val_y_pred_check)
-        test_y_true, test_y_pred = get_predictions(model, test_loader, DEVICE)
+        test_y_true, test_y_pred = get_predictions(model, test_loader, DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
     print(f"📈 Validation check: val_acc = {val_acc_check:.4f}")
 
     test_proba = None
-    if getattr(model, "fc", None) is not None and getattr(model.fc, "out_features", None) == 2:
+    if get_num_classes(model) == 2:
         y_proba_list = []
         with torch.inference_mode():
             for inputs, _ in test_loader:
                 inputs = inputs.to(DEVICE)
-                logits = model(inputs)
+                logits = model(inputs, backbone_mode="eval", enable_dropout=False)
                 probs = torch.softmax(logits, dim=1)[:, 1]
                 y_proba_list.extend(probs.detach().cpu().tolist())
         test_proba = y_proba_list

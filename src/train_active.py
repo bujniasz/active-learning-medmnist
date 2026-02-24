@@ -6,7 +6,7 @@ import argparse
 import random
 from pathlib import Path
 import json
-
+from typing import Literal
 
 # Torch
 import torch
@@ -25,7 +25,7 @@ from libact.base.interfaces import ProbabilisticModel
 
 # Custom
 from load_data import prepare_split_active
-from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_to_csv
+from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -96,48 +96,63 @@ class TorchModelWrapper(ProbabilisticModel):
     def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1, seed: int | None = None, dropout_p: float = 0.2):
         self.in_channels = in_channels
         self.num_classes = num_classes
-        self.model = resnet18(weights=ResNet18_Weights.DEFAULT)
-        if in_channels != 3:
-            self.model.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
-        self.model.to(DEVICE)
+        self.model = ResNet18EmbedDropout(
+            in_channels=in_channels,
+            num_classes=num_classes,
+            dropout_p=dropout_p
+        ).to(DEVICE)
         self.loss_fn = nn.CrossEntropyLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.epochs_per_cycle = epochs_per_cycle
         self.seed = seed
-        self.dropout = nn.Dropout(p=dropout_p)
+        #self.dropout = nn.Dropout(p=dropout_p)
 
-    def _forward_logits_with_dropout(self, inputs: torch.Tensor, enable_dropout: bool) -> torch.Tensor:
-        """
-        Forward that applies dropout on features before fc.
-        If enable_dropout=True, dropout is in train mode; otherwise eval mode.
-        """
-        # keep backbone in eval (esp. batchnorm stability)
-        self.model.eval()
+    # def _forward_logits_with_dropout(
+    #     self,
+    #     inputs: torch.Tensor,
+    #     *,
+    #     backbone_mode: Literal["train", "eval"],
+    #     enable_dropout: bool,
+    # ) -> torch.Tensor:
+    #     """
+    #     Forward through ResNet18 backbone up to pooled features, then optional dropout, then fc.
 
-        # control dropout behavior explicitly
-        if enable_dropout:
-            self.dropout.train()
-        else:
-            self.dropout.eval()
+    #     backbone_mode:
+    #     - "train": normal training mode (BatchNorm updates running stats)
+    #     - "eval" : frozen backbone mode (BatchNorm uses running stats)
 
-        # forward through resnet up to features
-        x = self.model.conv1(inputs)
-        x = self.model.bn1(x)
-        x = self.model.relu(x)
-        x = self.model.maxpool(x)
+    #     enable_dropout:
+    #     - True : dropout active (train mode)
+    #     - False: dropout disabled (eval mode)
+    #     """
+    #     if backbone_mode == "train":
+    #         self.model.train()
+    #     else:
+    #         self.model.eval()
 
-        x = self.model.layer1(x)
-        x = self.model.layer2(x)
-        x = self.model.layer3(x)
-        x = self.model.layer4(x)
+    #     # control dropout behavior explicitly (independent of backbone)
+    #     if enable_dropout:
+    #         self.dropout.train()
+    #     else:
+    #         self.dropout.eval()
 
-        x = self.model.avgpool(x)
-        x = torch.flatten(x, 1)  # (N, 512)
+    #     # forward through resnet up to features
+    #     x = self.model.conv1(inputs)
+    #     x = self.model.bn1(x)
+    #     x = self.model.relu(x)
+    #     x = self.model.maxpool(x)
 
-        x = self.dropout(x)
-        logits = self.model.fc(x)  # fc remains Linear
-        return logits
+    #     x = self.model.layer1(x)
+    #     x = self.model.layer2(x)
+    #     x = self.model.layer3(x)
+    #     x = self.model.layer4(x)
+
+    #     x = self.model.avgpool(x)
+    #     x = torch.flatten(x, 1)  # (N, 512)
+
+    #     x = self.dropout(x)      # dropout is a separate module
+    #     logits = self.model.fc(x)  # fc remains Linear
+    #     return logits
 
 
     def predict_proba(self, X: np.ndarray, batch_size: int = 256) -> np.ndarray:
@@ -155,7 +170,7 @@ class TorchModelWrapper(ProbabilisticModel):
         with torch.inference_mode():
             for (inputs,) in dl:
                 inputs = inputs.to(DEVICE)
-                logits = self._forward_logits_with_dropout(inputs, enable_dropout=False)
+                logits = self.model(inputs, backbone_mode="eval", enable_dropout=False)
                 probs = torch.softmax(logits, dim=1)
                 all_probs.append(probs.detach().cpu().numpy())
 
@@ -192,7 +207,7 @@ class TorchModelWrapper(ProbabilisticModel):
             with torch.inference_mode():
                 for (inputs,) in dl:
                     inputs = inputs.to(DEVICE)
-                    logits = self._forward_logits_with_dropout(inputs, enable_dropout=True)
+                    logits = self.model(inputs, backbone_mode="eval", enable_dropout=True)
                     all_probs.append(torch.softmax(logits, dim=1).cpu().numpy())
             probs_T.append(np.concatenate(all_probs, axis=0))
 
@@ -225,7 +240,7 @@ class TorchModelWrapper(ProbabilisticModel):
             with torch.inference_mode():
                 for (inputs,) in dl:
                     inputs = inputs.to(DEVICE)
-                    logits = self._forward_logits_with_dropout(inputs, enable_dropout=True)
+                    logits = self.model(inputs, backbone_mode="eval", enable_dropout=True)
                     all_probs.append(torch.softmax(logits, dim=1).cpu().numpy())
 
             probs_T.append(np.concatenate(all_probs, axis=0))
@@ -257,12 +272,14 @@ class TorchModelWrapper(ProbabilisticModel):
             # output shape: (N, 512, 1, 1)
             embeddings.append(output.detach().cpu())
 
-        handle = self.model.avgpool.register_forward_hook(hook_fn)
+        #handle = self.model.avgpool.register_forward_hook(hook_fn)
+
+        handle = self.model.backbone.avgpool.register_forward_hook(hook_fn)
 
         with torch.inference_mode():
             for (inputs,) in dl:
                 inputs = inputs.to(DEVICE)
-                _ = self.model(inputs)
+                _ = self.model(inputs, backbone_mode="eval", enable_dropout=False)
 
         handle.remove()
 
@@ -296,7 +313,7 @@ class TorchModelWrapper(ProbabilisticModel):
             for xb, yb in dl:
                 xb, yb = xb.to(DEVICE, non_blocking=True), yb.to(DEVICE, non_blocking=True)
                 self.optimizer.zero_grad()
-                logits = self._forward_logits_with_dropout(xb, enable_dropout=False)
+                logits = self.model(xb, backbone_mode="train", enable_dropout=True)
                 loss = self.loss_fn(logits, yb)
                 loss.backward()
                 self.optimizer.step()
@@ -402,8 +419,10 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrap
         oracle = IdealLabeler(Dataset(X, y))
         if strategy == "random":
             qs = RandomSampling(active_ds, random_state=seed)
-        else:
+        elif strategy == "uncertainty":
             qs = UncertaintySampling(active_ds, method=method, model=wrapper)
+        else:
+            qs = None
         return active_ds, oracle, qs, init_idx
 
 
@@ -438,10 +457,12 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrap
 
     active_ds = Dataset(X, y_masked)
     oracle = IdealLabeler(Dataset(X, y))
-    if args.strategy == "random":
+    if strategy == "random":
         qs = RandomSampling(active_ds, random_state=seed)
-    else:
+    elif strategy == "uncertainty":
         qs = UncertaintySampling(active_ds, method=method, model=wrapper)
+    else:
+        qs = None
 
     return active_ds, oracle, qs, init_idx
 
@@ -555,7 +576,7 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
         wrapper.train(active_ds, verbose=True)
         cycle += 1; asked += k
 
-        _, val_y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE)
+        _, val_y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
 
         val_acc = accuracy_score(y_val, val_y_pred)
         val_f1 = f1_score(y_val, val_y_pred, average='macro')
@@ -699,7 +720,7 @@ if __name__ == "__main__":
         wrapper.train(active_ds, verbose=True)
 
         X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
-        _, val_y_pred = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
+        _, val_y_pred = get_predictions(wrapper.model, (X_val, y_val), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
 
         start_val_acc = accuracy_score(y_val, val_y_pred)
         start_val_f1 = f1_score(y_val, val_y_pred, average='macro')
@@ -799,12 +820,12 @@ if __name__ == "__main__":
     wrapper.model.eval()
 
     #val double check
-    val_y_true_check, val_y_pred_check = get_predictions(wrapper.model, (X_val, y_val), DEVICE)
+    val_y_true_check, val_y_pred_check = get_predictions(wrapper.model, (X_val, y_val), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
     val_acc_check = accuracy_score(val_y_true_check, val_y_pred_check)
     print(f"VAL ACC DOUBLE CHECK = {val_acc_check:.4f}")
 
     with torch.inference_mode():
-        _, test_y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE)
+        _, test_y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
         test_proba = wrapper.predict_proba(X_test)[:, 1] if getattr(wrapper, "num_classes", None) == 2 else None
     
     class_report_conf_matrix(y_test, test_y_pred)
