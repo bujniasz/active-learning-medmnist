@@ -43,7 +43,7 @@ def parse_args():
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
-    p.add_argument("-r", "--results-path", type=str, default="results/test-exps.csv", 
+    p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv", 
                         help="Global CSV log path (appends rows). Default: results/test-exps.csv")
     p.add_argument("--select-metric", type=str, default="mean",
                         choices=["mean", "acc", "f1", "auc", "ap"],
@@ -54,53 +54,6 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
-
-# class ResNet18EmbedDropout(nn.Module):
-#     def __init__(self, in_channels: int, num_classes: int, dropout_p: float = 0.2):
-#         super().__init__()
-#         self.backbone = resnet18(weights=ResNet18_Weights.DEFAULT)
-#         if in_channels != 3:
-#             self.backbone.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
-
-#         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
-#         self.dropout = nn.Dropout(p=dropout_p)
-
-#     def forward(
-#         self,
-#         x: torch.Tensor,
-#         *,
-#         backbone_mode: Literal["train", "eval"] = "train",
-#         enable_dropout: bool = True,
-#     ) -> torch.Tensor:
-
-#         if backbone_mode == "train":
-#             self.backbone.train()
-#         else:
-#             self.backbone.eval()
-
-#         if enable_dropout:
-#             self.dropout.train()
-#         else:
-#             self.dropout.eval()
-
-#         b = self.backbone
-
-#         x = b.conv1(x)
-#         x = b.bn1(x)
-#         x = b.relu(x)
-#         x = b.maxpool(x)
-
-#         x = b.layer1(x)
-#         x = b.layer2(x)
-#         x = b.layer3(x)
-#         x = b.layer4(x)
-
-#         x = b.avgpool(x)
-#         x = torch.flatten(x, 1)  # (N, 512)
-
-#         x = self.dropout(x)
-#         logits = b.fc(x)
-#         return logits
 
 # === SEED ===
 def set_seed(seed: int = 42):
@@ -215,6 +168,7 @@ def run_supervised_loop(model, train_loader, val_loader, *,
             "step": int(epoch + 1),
             "labeled_count": int(len(train_loader.dataset)),
             "split": "val",
+            "train_loss": fmt(avg_train_loss),
 
             "acc": fmt(val_acc),
             "f1_macro": fmt(val_f1),
@@ -224,6 +178,7 @@ def run_supervised_loop(model, train_loader, val_loader, *,
             "val_mean": fmt(val_mean),
             "select_metric": select_metric,
             "is_best": int(is_best),
+            "tp": -1, "fp": -1, "tn": -1, "fn": -1,
         }, RESULTS_PATH)
 
         if sel > best_sel + delta:
@@ -326,7 +281,7 @@ if __name__ == "__main__":
                 y_proba_list.extend(probs.detach().cpu().tolist())
         test_proba = y_proba_list
 
-    class_report_conf_matrix(test_y_true, test_y_pred)
+    tp, fp, tn, fn = class_report_conf_matrix(test_y_true, test_y_pred)
 
     test_acc = accuracy_score(test_y_true, test_y_pred)
     test_f1  = f1_score(test_y_true, test_y_pred, average="macro")
@@ -358,6 +313,7 @@ if __name__ == "__main__":
             "step": -1,
             "labeled_count": checkpoint.get("train_size", ""),
             "split": "test",
+            "train_loss": -1,
 
             "acc": fmt(test_acc),
             "f1_macro": fmt(test_f1),
@@ -367,4 +323,5 @@ if __name__ == "__main__":
             "val_mean": "",
             "select_metric": checkpoint.get("select_metric", args.select_metric),
             "is_best": -1,
+            "tp": tp, "fp": fp, "tn": tn, "fn": fn,
         }, RESULTS_PATH)

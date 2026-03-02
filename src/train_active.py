@@ -6,7 +6,6 @@ import argparse
 import random
 from pathlib import Path
 import json
-from typing import Literal
 
 # Torch
 import torch
@@ -37,6 +36,40 @@ def entropy_rows(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
     p = np.clip(probs, eps, 1.0)
     return -np.sum(p * np.log(p), axis=-1)
+
+def select_uncertainty_entropy_full_pool(active_ds: Dataset, wrapper, k: int) -> list[int]:
+    """Select top-k unlabeled samples by predictive entropy on the FULL pool.
+
+    Implements:
+        x* = argmax_{x in U} ( - sum_i p(y_i|x) log p(y_i|x) )
+
+    Notes:
+      - Uses wrapper.predict_proba on the full unlabeled pool.
+      - Deterministic forward pass assumed (dropout disabled in wrapper.predict_proba).
+      - Returns libact entry ids (integers compatible with active_ds.update()).
+    """
+    if k <= 0:
+        return []
+
+    # Official libact API: returns IDs and the corresponding feature matrix/array
+    unlabeled_entry_ids, X_pool = active_ds.get_unlabeled_entries()
+    if len(unlabeled_entry_ids) == 0:
+        return []
+
+    probs = wrapper.predict_proba(X_pool)  # shape: (N, C)
+
+    # Entropy: -sum p log p
+    eps = 1e-12
+    p = np.clip(probs, eps, 1.0)
+    scores = -np.sum(p * np.log(p), axis=1)  # shape: (N,)
+
+    k = min(k, len(unlabeled_entry_ids))
+
+    # Top-k by entropy (descending)
+    top_idx = np.argpartition(scores, -k)[-k:]                # fast top-k (unordered)
+    top_idx = top_idx[np.argsort(scores[top_idx])[::-1]]      # sort those k desc
+
+    return [int(unlabeled_entry_ids[int(j)]) for j in top_idx]
 
 def bald_score(probs_T: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
@@ -105,55 +138,6 @@ class TorchModelWrapper(ProbabilisticModel):
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.epochs_per_cycle = epochs_per_cycle
         self.seed = seed
-        #self.dropout = nn.Dropout(p=dropout_p)
-
-    # def _forward_logits_with_dropout(
-    #     self,
-    #     inputs: torch.Tensor,
-    #     *,
-    #     backbone_mode: Literal["train", "eval"],
-    #     enable_dropout: bool,
-    # ) -> torch.Tensor:
-    #     """
-    #     Forward through ResNet18 backbone up to pooled features, then optional dropout, then fc.
-
-    #     backbone_mode:
-    #     - "train": normal training mode (BatchNorm updates running stats)
-    #     - "eval" : frozen backbone mode (BatchNorm uses running stats)
-
-    #     enable_dropout:
-    #     - True : dropout active (train mode)
-    #     - False: dropout disabled (eval mode)
-    #     """
-    #     if backbone_mode == "train":
-    #         self.model.train()
-    #     else:
-    #         self.model.eval()
-
-    #     # control dropout behavior explicitly (independent of backbone)
-    #     if enable_dropout:
-    #         self.dropout.train()
-    #     else:
-    #         self.dropout.eval()
-
-    #     # forward through resnet up to features
-    #     x = self.model.conv1(inputs)
-    #     x = self.model.bn1(x)
-    #     x = self.model.relu(x)
-    #     x = self.model.maxpool(x)
-
-    #     x = self.model.layer1(x)
-    #     x = self.model.layer2(x)
-    #     x = self.model.layer3(x)
-    #     x = self.model.layer4(x)
-
-    #     x = self.model.avgpool(x)
-    #     x = torch.flatten(x, 1)  # (N, 512)
-
-    #     x = self.dropout(x)      # dropout is a separate module
-    #     logits = self.model.fc(x)  # fc remains Linear
-    #     return logits
-
 
     def predict_proba(self, X: np.ndarray, batch_size: int = 256) -> np.ndarray:
         self.model.eval()
@@ -194,10 +178,6 @@ class TorchModelWrapper(ProbabilisticModel):
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
 
         self.model.eval()
-        # enable dropout only
-        # for m in self.model.modules():
-        #     if isinstance(m, nn.Dropout):
-        #         m.train()
 
         probs_T = []
         for t in range(T):
@@ -294,6 +274,10 @@ class TorchModelWrapper(ProbabilisticModel):
         X_t = torch.from_numpy(X)
         if X_t.dtype == torch.uint8:
             X_t = X_t.float() / 255.0
+        else:
+            X_t = X_t.float()
+            if X_t.max() > 1.5:
+                X_t = X_t / 255.0
         if X_t.ndim == 3:
             X_t = X_t.unsqueeze(1)
         y_t = torch.from_numpy(y).long()
@@ -321,6 +305,8 @@ class TorchModelWrapper(ProbabilisticModel):
             avg_loss = total_loss / len(dl)
             if verbose:
                 print(f"   🔹 Training loss: {avg_loss:.4f}")
+        
+        return float(avg_loss)
 
     def train(self, dataset, verbose: bool = False):
         X_l, y_l = dataset.get_labeled_entries()
@@ -328,7 +314,7 @@ class TorchModelWrapper(ProbabilisticModel):
             return
         X_arr = np.stack(X_l)
         y_arr = np.asarray(y_l, dtype=np.int64)
-        self.train_on_numpy(X_arr, y_arr, epochs=getattr(self, "epochs_per_cycle", 1), verbose=verbose)
+        return self.train_on_numpy(X_arr, y_arr, epochs=getattr(self, "epochs_per_cycle", 1), verbose=verbose)
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return self.predict_proba(X).argmax(axis=1)
@@ -348,11 +334,11 @@ def parse_args():
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
-    p.add_argument("-r", "--results-path", type=str, default="results/test-exps.csv",
+    p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv",
                help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
-    p.add_argument("--init-size", type=int, default=500)
-    p.add_argument("--budget", type=int, default=20)
-    p.add_argument("--batch", type=int, default=10, help="queries per AL cycle")
+    p.add_argument("--init-size", type=int, default=100)
+    p.add_argument("--budget", type=int, default=300)
+    p.add_argument("--batch", type=int, default=50, help="queries per AL cycle")
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
@@ -419,8 +405,6 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrap
         oracle = IdealLabeler(Dataset(X, y))
         if strategy == "random":
             qs = RandomSampling(active_ds, random_state=seed)
-        elif strategy == "uncertainty":
-            qs = UncertaintySampling(active_ds, method=method, model=wrapper)
         else:
             qs = None
         return active_ds, oracle, qs, init_idx
@@ -459,8 +443,6 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrap
     oracle = IdealLabeler(Dataset(X, y))
     if strategy == "random":
         qs = RandomSampling(active_ds, random_state=seed)
-    elif strategy == "uncertainty":
-        qs = UncertaintySampling(active_ds, method=method, model=wrapper)
     else:
         qs = None
 
@@ -520,60 +502,67 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
                 y_new = oracle.label(active_ds.data[ask_id][0])
                 active_ds.update(ask_id, y_new)
         else:
-            cycle_ask_ids = []
-            for _ in range(k):
-                if args.strategy == "egl_fc":
-                    unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
+            if args.strategy == "uncertainty":
+                # Custom uncertainty sampling: predictive entropy over FULL unlabeled pool
+                cycle_ask_ids = select_uncertainty_entropy_full_pool(active_ds, wrapper, k)
+                for ask_id in cycle_ask_ids:
+                    y_new = oracle.label(active_ds.data[ask_id][0])
+                    active_ds.update(int(ask_id), y_new)
+            else:
+                cycle_ask_ids = []
+                for _ in range(k):
+                    if args.strategy == "egl_fc":
+                        unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
 
-                    cand_seed = int(args.seed + 10_000 * cycle + asked)
-                    if len(unlabeled_ids) > args.candidate_size:
-                        rng = np.random.default_rng(cand_seed)
-                        unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
+                        cand_seed = int(args.seed + 10_000 * cycle + asked)
+                        if len(unlabeled_ids) > args.candidate_size:
+                            rng = np.random.default_rng(cand_seed)
+                            unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
 
-                    X_u = active_ds._X[unlabeled_ids]
+                        X_u = active_ds._X[unlabeled_ids]
 
-                    probs = wrapper.predict_proba(X_u)
-                    emb = wrapper.extract_embeddings(X_u)
+                        probs = wrapper.predict_proba(X_u)
+                        emb = wrapper.extract_embeddings(X_u)
 
-                    scores = egl_fc_score(emb, probs)
-                    pick_local = int(np.argmax(scores))
-                    ask_id = int(unlabeled_ids[pick_local])
+                        scores = egl_fc_score(emb, probs)
+                        pick_local = int(np.argmax(scores))
+                        ask_id = int(unlabeled_ids[pick_local])
 
-                elif args.strategy in ("mc_entropy", "mc_bald"):
-                    cand_seed = int(args.seed + 10_000 * cycle + asked)
-                    mc_seed   = int(args.seed + 20_000 * cycle + asked)
-                    
-                    unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
+                    elif args.strategy in ("mc_entropy", "mc_bald"):
+                        cand_seed = int(args.seed + 10_000 * cycle + asked)
+                        mc_seed   = int(args.seed + 20_000 * cycle + asked)
+                        
+                        unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
 
-                    if len(unlabeled_ids) > args.candidate_size:
-                        rng = np.random.default_rng(cand_seed)  # (opcjonalnie później poprawimy seed o asked/cycle)
-                        unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
+                        if len(unlabeled_ids) > args.candidate_size:
+                            rng = np.random.default_rng(cand_seed)  # (opcjonalnie później poprawimy seed o asked/cycle)
+                            unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
 
-                    X_u = active_ds._X[unlabeled_ids]
+                        X_u = active_ds._X[unlabeled_ids]
 
-                    if args.strategy == "mc_entropy":
-                        probs = wrapper.mc_predict_proba(X_u, T=args.mc_T, base_seed=mc_seed)
-                        scores = entropy_rows(probs)
+                        if args.strategy == "mc_entropy":
+                            probs = wrapper.mc_predict_proba(X_u, T=args.mc_T, base_seed=mc_seed)
+                            scores = entropy_rows(probs)
+                        else:
+                            probs_T = wrapper.mc_predict_proba_T(X_u, T=args.mc_T, base_seed=mc_seed)
+                            scores = bald_score(probs_T)
+
+                        pick_local = int(np.argmax(scores))
+                        ask_id = int(unlabeled_ids[pick_local])
                     else:
-                        probs_T = wrapper.mc_predict_proba_T(X_u, T=args.mc_T, base_seed=mc_seed)
-                        scores = bald_score(probs_T)
+                        ask_id = qs.make_query()
 
-                    pick_local = int(np.argmax(scores))
-                    ask_id = int(unlabeled_ids[pick_local])
-                else:
-                    ask_id = qs.make_query()
+                    ask_id = int(ask_id)
+                    cycle_ask_ids.append(ask_id)
 
-                ask_id = int(ask_id)
-                cycle_ask_ids.append(ask_id)
+                    y_new = oracle.label(active_ds.data[ask_id][0])
+                    active_ds.update(ask_id, y_new)
+                ask_log.append({
+                    "cycle": cycle+1,
+                    "ask_ids": cycle_ask_ids,
+                })
 
-                y_new = oracle.label(active_ds.data[ask_id][0])
-                active_ds.update(ask_id, y_new)
-            ask_log.append({
-                "cycle": cycle,
-                "ask_ids": cycle_ask_ids,
-            })
-
-        wrapper.train(active_ds, verbose=True)
+        val_loss =  wrapper.train(active_ds, verbose=True)
         cycle += 1; asked += k
 
         _, val_y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
@@ -595,7 +584,7 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
 
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
         print(f"[cycle {cycle}/{int(budget / batch)}] "
-              f"labeled={labeled_cnt} val_acc={val_acc:.4f} val_f1={val_f1:.4f} val_auc={val_auc:.4f} val_ap={val_ap:.4f} val_mean={val_mean:.4f}")
+              f"labeled={labeled_cnt} train loss={val_loss:.4f} val_acc={val_acc:.4f} val_f1={val_f1:.4f} val_auc={val_auc:.4f} val_ap={val_ap:.4f} val_mean={val_mean:.4f}")
         sel_map = {"mean": val_mean, "acc": val_acc, "f1": val_f1, "auc": val_auc, "ap": val_ap}
         sel = float(sel_map[select_metric])
 
@@ -615,6 +604,7 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
             "step": int(cycle),
             "labeled_count": int(labeled_cnt),
             "split": "val",
+            "train_loss": fmt(val_loss),
 
             "acc": fmt(val_acc),
             "f1_macro": fmt(val_f1),
@@ -624,6 +614,7 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
             "val_mean": fmt(val_mean),
             "select_metric": select_metric,
             "is_best": int(is_best),
+            "tp": -1, "fp": -1, "tn": -1, "fn": -1,
         }, RESULTS_PATH)  
         if sel > best_sel + delta:
             best_sel = sel
@@ -717,7 +708,7 @@ if __name__ == "__main__":
 
         # First training (before anotations)
         print("\n🔸 Initial training on starting labeled set")
-        wrapper.train(active_ds, verbose=True)
+        start_loss = wrapper.train(active_ds, verbose=True)
 
         X_val, y_val, _, _ = prepare_split_active(args.data_dir, split="val", to_nchw=True)
         _, val_y_pred = get_predictions(wrapper.model, (X_val, y_val), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
@@ -741,6 +732,7 @@ if __name__ == "__main__":
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
         print(
             f"[cycle 0] labeled={labeled_cnt} "
+            f"val_loss={start_loss:.4f} "
             f"val_acc={start_val_acc:.4f} val_f1={start_val_f1:.4f} "
             f"val_auc={start_val_auc:.4f} val_ap={start_val_ap:.4f} "
             f"val_mean={start_mean:.4f}"
@@ -757,6 +749,7 @@ if __name__ == "__main__":
             "step": 0,
             "labeled_count": int(labeled_cnt),
             "split": "val",
+            "train_loss": fmt(start_loss),
 
             "acc": fmt(start_val_acc),
             "f1_macro": fmt(start_val_f1),
@@ -766,6 +759,7 @@ if __name__ == "__main__":
             "val_mean": fmt(start_mean),
             "select_metric": args.select_metric,
             "is_best": 1,
+            "tp": -1, "fp": -1, "tn": -1, "fn": -1,
         }, RESULTS_PATH)
 
         best_sel = {"mean": start_mean, "acc": start_val_acc, "f1": start_val_f1, "auc": start_val_auc, "ap": start_val_ap}[args.select_metric]
@@ -828,7 +822,7 @@ if __name__ == "__main__":
         _, test_y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
         test_proba = wrapper.predict_proba(X_test)[:, 1] if getattr(wrapper, "num_classes", None) == 2 else None
     
-    class_report_conf_matrix(y_test, test_y_pred)
+    tp, fp, tn, fn = class_report_conf_matrix(y_test, test_y_pred)
 
     test_acc = accuracy_score(y_test, test_y_pred)
     test_f1  = f1_score(y_test, test_y_pred, average="macro")
@@ -860,6 +854,7 @@ if __name__ == "__main__":
             "step": -1,
             "labeled_count": checkpoint.get("labeled_count", ""),
             "split": "test",
+            "train_loss": -1,
 
             "acc": fmt(test_acc),
             "f1_macro": fmt(test_f1),
@@ -869,4 +864,5 @@ if __name__ == "__main__":
             "val_mean": "",
             "select_metric": checkpoint.get("select_metric", args.select_metric),
             "is_best": -1,
+            "tp": tp, "fp": fp, "tn": tn, "fn": fn,
         }, RESULTS_PATH)
