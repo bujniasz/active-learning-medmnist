@@ -6,6 +6,7 @@ import argparse
 import random
 from pathlib import Path
 import json
+from typing import Tuple, List
 
 # Torch
 import torch
@@ -29,6 +30,31 @@ from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_t
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def get_candidate_pool(
+    active_ds: Dataset,
+    candidate_size: int,
+    rng_seed: int,
+):
+    """
+    Returns (cand_entry_ids, X_cand) where cand_entry_ids are entry IDs usable in active_ds.update().
+    candidate_size:
+      -1 => full unlabeled pool
+      >0 => uniform subsample without replacement if pool bigger than candidate_size
+    """
+    unlabeled_entry_ids, X_pool = active_ds.get_unlabeled_entries()
+    n = len(unlabeled_entry_ids)
+    if n == 0:
+        return np.array([], dtype=int), np.asarray(X_pool)
+
+    unlabeled_entry_ids = np.asarray(unlabeled_entry_ids)
+
+    if candidate_size == -1 or candidate_size >= n:
+        return unlabeled_entry_ids.astype(int), np.asarray(X_pool)
+
+    rng = np.random.default_rng(int(rng_seed))
+    idx = rng.choice(n, size=int(candidate_size), replace=False)
+    return unlabeled_entry_ids[idx].astype(int), np.asarray(X_pool)[idx]
+
 def entropy_rows(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
     probs: (..., C)
@@ -36,6 +62,10 @@ def entropy_rows(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
     p = np.clip(probs, eps, 1.0)
     return -np.sum(p * np.log(p), axis=-1)
+
+def get_entropy_scores(X_u, wrapper):
+    probs = wrapper.predict_proba(X_u)
+    return entropy_rows(probs)
 
 def select_uncertainty_entropy_full_pool(active_ds: Dataset, wrapper, k: int) -> list[int]:
     """Select top-k unlabeled samples by predictive entropy on the FULL pool.
@@ -126,7 +156,7 @@ def egl_fc_score(emb: np.ndarray, probs: np.ndarray) -> np.ndarray:
 # === CUSTOM WRAPPER FOR libact <-> resnet TO WORK ===
 # === https://github.com/ntucllab/libact/blob/master/libact/base/interfaces.py ===
 class TorchModelWrapper(ProbabilisticModel):
-    def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1, seed: int | None = None, dropout_p: float = 0.2):
+    def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1, seed: int | None = None, dropout_p: float = 0.5):
         self.in_channels = in_channels
         self.num_classes = num_classes
         self.model = ResNet18EmbedDropout(
@@ -281,10 +311,12 @@ class TorchModelWrapper(ProbabilisticModel):
         if X_t.ndim == 3:
             X_t = X_t.unsqueeze(1)
         y_t = torch.from_numpy(y).long()
-        ds = TensorDataset(X_t, y_t)         
+
+        ds = TensorDataset(X_t, y_t)
         n = len(ds)
         if n < 2:
-            return  # skipping if not enough instances
+            return None  # explicit
+
         eff_bs = min(batch_size, n)
         gen = None
         if self.seed is not None:
@@ -292,7 +324,9 @@ class TorchModelWrapper(ProbabilisticModel):
             gen.manual_seed(self.seed)
 
         dl = DataLoader(ds, batch_size=eff_bs, shuffle=True, drop_last=True, generator=gen, num_workers=0)
-        for _ in range(epochs):
+
+        epoch_losses: list[float] = []
+        for _ in range(int(epochs)):
             total_loss = 0.0
             for xb, yb in dl:
                 xb, yb = xb.to(DEVICE, non_blocking=True), yb.to(DEVICE, non_blocking=True)
@@ -301,12 +335,15 @@ class TorchModelWrapper(ProbabilisticModel):
                 loss = self.loss_fn(logits, yb)
                 loss.backward()
                 self.optimizer.step()
-                total_loss += loss.item()
-            avg_loss = total_loss / len(dl)
-            if verbose:
-                print(f"   🔹 Training loss: {avg_loss:.4f}")
-        
-        return float(avg_loss)
+                total_loss += float(loss.item())
+
+            avg_loss = total_loss / max(1, len(dl))
+            epoch_losses.append(avg_loss)
+            # if verbose:
+            #     print(f"   🔹 Training loss: {avg_loss:.4f}")
+
+        # train_loss per cycle = mean loss across epochs
+        return float(np.mean(epoch_losses))
 
     def train(self, dataset, verbose: bool = False):
         X_l, y_l = dataset.get_labeled_entries()
@@ -337,8 +374,8 @@ def parse_args():
     p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv",
                help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
     p.add_argument("--init-size", type=int, default=100)
-    p.add_argument("--budget", type=int, default=300)
-    p.add_argument("--batch", type=int, default=50, help="queries per AL cycle")
+    p.add_argument("--budget", type=int, default=100)
+    p.add_argument("--batch", type=int, default=20, help="queries per AL cycle")
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
@@ -350,7 +387,7 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--strategy", type=str, default="uncertainty", choices=["uncertainty", "random", "mc_entropy", "mc_bald", "mc_entropy_diverse", "mc_bald_diverse", "entropy_diverse", "egl_fc"], help="Query strategy")
     p.add_argument("--mc-T", type=int, default=10, help="Number of MC Dropout forward passes")
-    p.add_argument("--candidate-size", type=int, default=2000, help="Unlabeled candidates to score each query (mc strategies)")
+    p.add_argument("--candidate-size", type=int, default=-1, help="Unlabeled candidates to score each query (mc strategies)")
     p.add_argument("--top-m-mult", type=int, default=10, help="For diverse batch: candidates = top_m_mult * batch")
     return p.parse_args()
 
@@ -459,111 +496,194 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
     Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
     while asked < budget:
         k = min(batch, budget - asked)
+
+        # ============================================================
+        # 1) DIVERSE STRATEGIES (batch mode)
+        # ============================================================
         if args.strategy in ("mc_bald_diverse", "mc_entropy_diverse", "entropy_diverse"):
             cand_seed = int(args.seed + 10_000 * cycle + asked)
             mc_seed   = int(args.seed + 20_000 * cycle + asked)
-            unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
 
-            if len(unlabeled_ids) > args.candidate_size:
-                rng = np.random.default_rng(cand_seed)
-                unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
+            cand_ids, X_u = get_candidate_pool(
+                active_ds,
+                candidate_size=args.candidate_size,
+                rng_seed=cand_seed,
+            )
 
-            X_u = active_ds._X[unlabeled_ids]
+            if len(cand_ids) == 0:
+                cycle_ask_ids = []
+            else:
+                # --- uncertainty score once per cycle ---
+                if args.strategy == "entropy_diverse":
+                    probs = wrapper.predict_proba(X_u)
+                    scores = entropy_rows(probs)
 
-            # --- score ---
-            if args.strategy == "entropy_diverse":
-                probs = wrapper.predict_proba(X_u)
-                scores = entropy_rows(probs)
-            elif args.strategy == "mc_entropy_diverse":
-                probs = wrapper.mc_predict_proba(X_u, T=args.mc_T, base_seed=mc_seed)
-                scores = entropy_rows(probs)  # (N,)
-            else:  # mc_bald_diverse
-                probs_T = wrapper.mc_predict_proba_T(X_u, T=args.mc_T, base_seed=mc_seed)
-                scores = bald_score(probs_T)  # (N,)
+                elif args.strategy == "mc_entropy_diverse":
+                    probs = wrapper.mc_predict_proba(
+                        X_u,
+                        T=args.mc_T,
+                        base_seed=mc_seed,
+                    )
+                    scores = entropy_rows(probs)
 
-            # --- top-M by uncertainty ---
-            M = min(len(unlabeled_ids), args.top_m_mult * k)
-            top_local = np.argsort(scores)[-M:]
+                else:  # mc_bald_diverse
+                    probs_T = wrapper.mc_predict_proba_T(
+                        X_u,
+                        T=args.mc_T,
+                        base_seed=mc_seed,
+                    )
+                    scores = bald_score(probs_T)
 
-            # --- diversity on embeddings among top-M ---
-            E_top = wrapper.extract_embeddings(X_u[top_local])
-            first_local = int(len(top_local) - 1)
-            diverse_local = k_center_greedy(E_top, k=k, seed=args.seed, first = first_local)
+                # --- top-M by uncertainty ---
+                M = min(len(cand_ids), args.top_m_mult * k)
+                top_local = np.argpartition(scores, -M)[-M:]
+                top_local = top_local[np.argsort(scores[top_local])[::-1]]
 
-            batch_local = top_local[diverse_local]
-            ask_ids = [int(unlabeled_ids[int(j)]) for j in batch_local]
+                # --- diversity among top-M ---
+                X_top = X_u[top_local]
+                E_top = wrapper.extract_embeddings(X_top)
+
+                diverse_local = k_center_greedy(
+                    E_top,
+                    k=min(k, len(top_local)),
+                    seed=args.seed,
+                    first=0,
+                )
+
+                batch_local = top_local[diverse_local]
+                cycle_ask_ids = [int(cand_ids[int(j)]) for j in batch_local]
 
             ask_log.append({
-                "cycle": cycle+1,
-                "ask_ids": ask_ids,
+                "cycle": cycle + 1,
+                "ask_ids": cycle_ask_ids,
             })
 
-            for ask_id in ask_ids:
-                y_new = oracle.label(active_ds.data[ask_id][0])
-                active_ds.update(ask_id, y_new)
+            for ask_id in cycle_ask_ids:
+                y_new = oracle.label(active_ds.data[int(ask_id)][0])
+                active_ds.update(int(ask_id), y_new)
+
+        # ============================================================
+        # 2) NON-DIVERSE STRATEGIES (batch mode)
+        # ============================================================
         else:
+            # --------------------------------------------------------
+            # 2a) Uncertainty (entropy) — always full pool
+            # --------------------------------------------------------
             if args.strategy == "uncertainty":
-                # Custom uncertainty sampling: predictive entropy over FULL unlabeled pool
-                cycle_ask_ids = select_uncertainty_entropy_full_pool(active_ds, wrapper, k)
+                cycle_ask_ids = select_uncertainty_entropy_full_pool(
+                    active_ds,
+                    wrapper,
+                    k,
+                )
+
+                ask_log.append({
+                    "cycle": cycle + 1,
+                    "ask_ids": cycle_ask_ids,
+                })
+
                 for ask_id in cycle_ask_ids:
-                    y_new = oracle.label(active_ds.data[ask_id][0])
+                    y_new = oracle.label(active_ds.data[int(ask_id)][0])
                     active_ds.update(int(ask_id), y_new)
+
+            # --------------------------------------------------------
+            # 2b) MC Entropy / MC BALD — one scoring pass per cycle
+            # --------------------------------------------------------
+            elif args.strategy in ("mc_entropy", "mc_bald"):
+                cand_seed = int(args.seed + 10_000 * cycle + asked)
+                mc_seed   = int(args.seed + 20_000 * cycle + asked)
+
+                cand_ids, X_u = get_candidate_pool(
+                    active_ds,
+                    candidate_size=args.candidate_size,
+                    rng_seed=cand_seed,
+                )
+
+                if len(cand_ids) == 0:
+                    cycle_ask_ids = []
+                else:
+                    if args.strategy == "mc_entropy":
+                        probs = wrapper.mc_predict_proba(
+                            X_u,
+                            T=args.mc_T,
+                            base_seed=mc_seed,
+                        )
+                        scores = entropy_rows(probs)
+                    else:  # mc_bald
+                        probs_T = wrapper.mc_predict_proba_T(
+                            X_u,
+                            T=args.mc_T,
+                            base_seed=mc_seed,
+                        )
+                        scores = bald_score(probs_T)
+
+                    k_eff = min(k, len(cand_ids))
+                    top_local = np.argpartition(scores, -k_eff)[-k_eff:]
+                    top_local = top_local[np.argsort(scores[top_local])[::-1]]
+                    cycle_ask_ids = [int(cand_ids[int(j)]) for j in top_local]
+
+                ask_log.append({
+                    "cycle": cycle + 1,
+                    "ask_ids": cycle_ask_ids,
+                })
+
+                for ask_id in cycle_ask_ids:
+                    y_new = oracle.label(active_ds.data[int(ask_id)][0])
+                    active_ds.update(int(ask_id), y_new)
+
+            # --------------------------------------------------------
+            # 2c) EGL-FC — one scoring pass per cycle
+            # --------------------------------------------------------
+            elif args.strategy == "egl_fc":
+                cand_seed = int(args.seed + 10_000 * cycle + asked)
+
+                cand_ids, X_u = get_candidate_pool(
+                    active_ds,
+                    candidate_size=args.candidate_size,
+                    rng_seed=cand_seed,
+                )
+
+                if len(cand_ids) == 0:
+                    cycle_ask_ids = []
+                else:
+                    probs = wrapper.predict_proba(X_u)
+                    emb = wrapper.extract_embeddings(X_u)
+                    scores = egl_fc_score(emb, probs)
+
+                    k_eff = min(k, len(cand_ids))
+                    top_local = np.argpartition(scores, -k_eff)[-k_eff:]
+                    top_local = top_local[np.argsort(scores[top_local])[::-1]]
+                    cycle_ask_ids = [int(cand_ids[int(j)]) for j in top_local]
+
+                ask_log.append({
+                    "cycle": cycle + 1,
+                    "ask_ids": cycle_ask_ids,
+                })
+
+                for ask_id in cycle_ask_ids:
+                    y_new = oracle.label(active_ds.data[int(ask_id)][0])
+                    active_ds.update(int(ask_id), y_new)
+
+            # --------------------------------------------------------
+            # 2d) Random / other libact strategies
+            # --------------------------------------------------------
             else:
                 cycle_ask_ids = []
+
                 for _ in range(k):
-                    if args.strategy == "egl_fc":
-                        unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
-
-                        cand_seed = int(args.seed + 10_000 * cycle + asked)
-                        if len(unlabeled_ids) > args.candidate_size:
-                            rng = np.random.default_rng(cand_seed)
-                            unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
-
-                        X_u = active_ds._X[unlabeled_ids]
-
-                        probs = wrapper.predict_proba(X_u)
-                        emb = wrapper.extract_embeddings(X_u)
-
-                        scores = egl_fc_score(emb, probs)
-                        pick_local = int(np.argmax(scores))
-                        ask_id = int(unlabeled_ids[pick_local])
-
-                    elif args.strategy in ("mc_entropy", "mc_bald"):
-                        cand_seed = int(args.seed + 10_000 * cycle + asked)
-                        mc_seed   = int(args.seed + 20_000 * cycle + asked)
-                        
-                        unlabeled_ids = [i for i, (_, y) in enumerate(active_ds.data) if y is None]
-
-                        if len(unlabeled_ids) > args.candidate_size:
-                            rng = np.random.default_rng(cand_seed)  # (opcjonalnie później poprawimy seed o asked/cycle)
-                            unlabeled_ids = rng.choice(unlabeled_ids, size=args.candidate_size, replace=False).tolist()
-
-                        X_u = active_ds._X[unlabeled_ids]
-
-                        if args.strategy == "mc_entropy":
-                            probs = wrapper.mc_predict_proba(X_u, T=args.mc_T, base_seed=mc_seed)
-                            scores = entropy_rows(probs)
-                        else:
-                            probs_T = wrapper.mc_predict_proba_T(X_u, T=args.mc_T, base_seed=mc_seed)
-                            scores = bald_score(probs_T)
-
-                        pick_local = int(np.argmax(scores))
-                        ask_id = int(unlabeled_ids[pick_local])
-                    else:
-                        ask_id = qs.make_query()
-
-                    ask_id = int(ask_id)
+                    ask_id = int(qs.make_query())
                     cycle_ask_ids.append(ask_id)
 
-                    y_new = oracle.label(active_ds.data[ask_id][0])
-                    active_ds.update(ask_id, y_new)
+                    y_new = oracle.label(active_ds.data[int(ask_id)][0])
+                    active_ds.update(int(ask_id), y_new)
+
                 ask_log.append({
-                    "cycle": cycle+1,
+                    "cycle": cycle + 1,
                     "ask_ids": cycle_ask_ids,
                 })
 
         val_loss =  wrapper.train(active_ds, verbose=True)
-        cycle += 1; asked += k
+        asked += len(cycle_ask_ids)
+        cycle += 1
 
         _, val_y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
 

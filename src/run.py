@@ -31,6 +31,15 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+STRATEGY_LABELS = {
+    "random": "Random",
+    "uncertainty": "Entropy",
+    "mc_bald": "BALD",
+    "entropy_diverse": "Entropy + Diversity",
+    "mc_bald_diverse": "BALD + Diversity",
+    "egl_fc": "EGL",
+}
+
 def make_color_map(strategies: list[str]) -> dict[str, str]:
     """
     Deterministic strategy->color mapping.
@@ -71,7 +80,14 @@ def compute_best_x_by_strategy(df_val: pd.DataFrame) -> dict[str, int]:
         best_x[strat] = best_lc
     return best_x
 
-
+def build_model_path(data_dir: str, results_csv: str, strategy: str, seed: int) -> str:
+    """
+    Build deterministic model path:
+    models/{dataset}-{results_name}-{strategy}-{seed}.pth
+    """
+    dataset = Path(data_dir).resolve().name
+    results_name = Path(results_csv).stem
+    return f"models/{dataset}-{results_name}-{strategy}-{seed}.pth"
 
 def plot_metric(
     df_val,
@@ -81,49 +97,29 @@ def plot_metric(
     out_path,
     color_map: dict[str, str],
 ):
-    """
-    Plot per-seed thin lines + thick mean line vs labeled_count for each strategy.
-    """
+    fig, ax = plt.subplots(figsize=(15, 6))
 
-    import matplotlib.pyplot as plt
+    x_ticks_all = sorted({int(v) for v in df_val["labeled_count"].dropna().to_numpy()})
 
-    fig = plt.figure()
-    ax = plt.gca()
-
-    # X ticks only at actually present labeled_count values
-    x_ticks = sorted({int(v) for v in df_val["labeled_count"].dropna().to_numpy()})
+    # show only some x ticks if there are too many
+    if len(x_ticks_all) > 12:
+        step = int(np.ceil(len(x_ticks_all) / 12))
+        x_ticks = x_ticks_all[::step]
+        if x_ticks[-1] != x_ticks_all[-1]:
+            x_ticks.append(x_ticks_all[-1])
+    else:
+        x_ticks = x_ticks_all
 
     for strat, d in df_val.groupby("strategy"):
         strat = str(strat)
-
         line_color = color_map.get(strat, None)
 
-        # -------------------------
-        # 1) Per-seed thin curves
-        # -------------------------
         seed_df = (
             d.groupby(["seed", "labeled_count"], as_index=False)[metric]
              .mean()
              .sort_values(["seed", "labeled_count"])
         )
 
-        for seed, sd in seed_df.groupby("seed"):
-            sx = sd["labeled_count"].to_numpy()
-            sy = sd[metric].to_numpy()
-
-            ax.plot(
-                sx,
-                sy,
-                linewidth=1.2,
-                alpha=0.30,
-                color=line_color,
-                marker=None,
-                label=None,
-            )
-
-        # -------------------------
-        # 2) Mean curve (thick)
-        # -------------------------
         g = (
             seed_df.groupby("labeled_count", as_index=False)[metric]
                    .mean()
@@ -136,17 +132,14 @@ def plot_metric(
         (line,) = ax.plot(
             x,
             y,
-            marker="o",
-            linewidth=2.8,
-            label=strat,
+            linewidth=2.1,
+            label=STRATEGY_LABELS.get(strat, strat),
             color=line_color,
         )
 
         line_color = line.get_color()
 
-        # -------------------------
-        # 3) Single X marker
-        # -------------------------
+        # X marker for best point
         if strat in best_x:
             x0 = best_x[strat]
             if x0 in set(x.tolist()):
@@ -155,30 +148,24 @@ def plot_metric(
                     [x0],
                     [y0],
                     marker="x",
-                    markersize=12,
-                    mew=3,
+                    markersize=9,
+                    mew=2.2,
                     linestyle="None",
                     color=line_color,
                 )
 
-    # -------------------------
-    # Axes formatting
-    # -------------------------
     ax.set_title(title)
     ax.set_xlabel("labeled_count")
     ax.set_ylabel(metric)
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, alpha=0.2)
 
-    # X axis ticks
     if x_ticks:
         ax.set_xticks(x_ticks)
         ax.set_xticklabels([str(v) for v in x_ticks])
 
-    # Y axis ticks every 0.05
     ax.yaxis.set_major_locator(MultipleLocator(0.05))
 
-    # Legend placement
-    legend_loc = "upper right" if metric == "train_loss" else "upper left"
+    legend_loc = "upper right" if metric == "train_loss" else "lower right"
     ax.legend(loc=legend_loc, framealpha=0.9)
 
     fig.tight_layout()
@@ -205,13 +192,6 @@ def main() -> None:
         default=None,
         help="Seeds to run/plot. If omitted with --no-run, will be auto-detected from CSV.",
     )
-    p.add_argument(
-        "--models",
-        nargs="+",
-        default=None,
-        help=("Model paths in the same order as cartesian product strategies×seeds. "
-              "Required when running training (unless --no-run)."),
-    )
     p.add_argument("--python", default=sys.executable, help="Python executable to use")
     p.add_argument("--no-run", action="store_true", help="Skip running training; just plot from CSV")
     p.add_argument("--overwrite-results", action="store_true", help="Delete results CSV before running")
@@ -231,8 +211,6 @@ def main() -> None:
             raise SystemExit("--data-dir is required unless --no-run")
         if args.strategies is None or args.seeds is None:
             raise SystemExit("--strategies and --seeds are required unless --no-run")
-        if args.models is None:
-            raise SystemExit("--models is required unless --no-run")
 
     # Overwrite CSV if requested
     if args.overwrite_results and results_csv.exists():
@@ -245,18 +223,18 @@ def main() -> None:
     if not args.no_run:
         strategies: list[str] = list(map(str, args.strategies))
         seeds: list[int] = list(args.seeds)
-        models: list[str] = list(args.models)
-
-        expected = len(strategies) * len(seeds)
-        if len(models) != expected:
-            raise SystemExit(f"Expected {expected} model paths (strategies×seeds), got {len(models)}")
 
         # Run in fixed order: for each strategy, for each seed
-        i = 0
+
         for strat in strategies:
             for seed in seeds:
-                model_path = models[i]
-                i += 1
+                model_path = build_model_path(
+                    args.data_dir,
+                    args.results_csv,
+                    strat,
+                    seed,
+                )
+
                 cmd = [
                     args.python,
                     str(train_script),
