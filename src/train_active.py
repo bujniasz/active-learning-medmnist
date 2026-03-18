@@ -374,7 +374,7 @@ def parse_args():
     p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv",
                help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
     p.add_argument("--init-size", type=int, default=100)
-    p.add_argument("--budget", type=int, default=100)
+    p.add_argument("--budget", type=int, default=40)
     p.add_argument("--batch", type=int, default=20, help="queries per AL cycle")
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
@@ -495,15 +495,36 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
     ask_log = []
     Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
     while asked < budget:
+
         k = min(batch, budget - asked)
 
-        # ============================================================
-        # 1) DIVERSE STRATEGIES (batch mode)
-        # ============================================================
-        if args.strategy in ("mc_bald_diverse", "mc_entropy_diverse", "entropy_diverse"):
-            cand_seed = int(args.seed + 10_000 * cycle + asked)
-            mc_seed   = int(args.seed + 20_000 * cycle + asked)
+        cand_seed = int(args.seed + 10_000 * cycle + asked)
+        mc_seed   = int(args.seed + 20_000 * cycle + asked)
 
+        # ============================================================
+        # 0) Random strategy (libact) – sequential querying
+        # ============================================================
+        if args.strategy == "random":
+
+            cycle_ask_ids = []
+
+            for _ in range(k):
+                ask_id = int(qs.make_query())
+                cycle_ask_ids.append(ask_id)
+
+                y_new = oracle.label(active_ds.data[ask_id][0])
+                active_ds.update(ask_id, y_new)
+
+            ask_log.append({
+                "cycle": cycle + 1,
+                "ask_ids": cycle_ask_ids,
+            })
+
+        else:
+
+            # ============================================================
+            # 1) Candidate pool (computed ONCE per cycle)
+            # ============================================================
             cand_ids, X_u = get_candidate_pool(
                 active_ds,
                 candidate_size=args.candidate_size,
@@ -512,13 +533,17 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
 
             if len(cand_ids) == 0:
                 cycle_ask_ids = []
-            else:
-                # --- uncertainty score once per cycle ---
-                if args.strategy == "entropy_diverse":
-                    probs = wrapper.predict_proba(X_u)
-                    scores = entropy_rows(probs)
 
-                elif args.strategy == "mc_entropy_diverse":
+            else:
+
+                # ============================================================
+                # 2) Compute uncertainty scores
+                # ============================================================
+
+                if args.strategy in ("uncertainty", "entropy_diverse"):
+                    scores = get_entropy_scores(X_u, wrapper)
+
+                elif args.strategy in ("mc_entropy", "mc_entropy_diverse"):
                     probs = wrapper.mc_predict_proba(
                         X_u,
                         T=args.mc_T,
@@ -526,7 +551,7 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
                     )
                     scores = entropy_rows(probs)
 
-                else:  # mc_bald_diverse
+                elif args.strategy in ("mc_bald", "mc_bald_diverse"):
                     probs_T = wrapper.mc_predict_proba_T(
                         X_u,
                         T=args.mc_T,
@@ -534,145 +559,54 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
                     )
                     scores = bald_score(probs_T)
 
-                # --- top-M by uncertainty ---
-                M = min(len(cand_ids), args.top_m_mult * k)
-                top_local = np.argpartition(scores, -M)[-M:]
-                top_local = top_local[np.argsort(scores[top_local])[::-1]]
-
-                # --- diversity among top-M ---
-                X_top = X_u[top_local]
-                E_top = wrapper.extract_embeddings(X_top)
-
-                diverse_local = k_center_greedy(
-                    E_top,
-                    k=min(k, len(top_local)),
-                    seed=args.seed,
-                    first=0,
-                )
-
-                batch_local = top_local[diverse_local]
-                cycle_ask_ids = [int(cand_ids[int(j)]) for j in batch_local]
-
-            ask_log.append({
-                "cycle": cycle + 1,
-                "ask_ids": cycle_ask_ids,
-            })
-
-            for ask_id in cycle_ask_ids:
-                y_new = oracle.label(active_ds.data[int(ask_id)][0])
-                active_ds.update(int(ask_id), y_new)
-
-        # ============================================================
-        # 2) NON-DIVERSE STRATEGIES (batch mode)
-        # ============================================================
-        else:
-            # --------------------------------------------------------
-            # 2a) Uncertainty (entropy) — always full pool
-            # --------------------------------------------------------
-            if args.strategy == "uncertainty":
-                cycle_ask_ids = select_uncertainty_entropy_full_pool(
-                    active_ds,
-                    wrapper,
-                    k,
-                )
-
-                ask_log.append({
-                    "cycle": cycle + 1,
-                    "ask_ids": cycle_ask_ids,
-                })
-
-                for ask_id in cycle_ask_ids:
-                    y_new = oracle.label(active_ds.data[int(ask_id)][0])
-                    active_ds.update(int(ask_id), y_new)
-
-            # --------------------------------------------------------
-            # 2b) MC Entropy / MC BALD — one scoring pass per cycle
-            # --------------------------------------------------------
-            elif args.strategy in ("mc_entropy", "mc_bald"):
-                cand_seed = int(args.seed + 10_000 * cycle + asked)
-                mc_seed   = int(args.seed + 20_000 * cycle + asked)
-
-                cand_ids, X_u = get_candidate_pool(
-                    active_ds,
-                    candidate_size=args.candidate_size,
-                    rng_seed=cand_seed,
-                )
-
-                if len(cand_ids) == 0:
-                    cycle_ask_ids = []
-                else:
-                    if args.strategy == "mc_entropy":
-                        probs = wrapper.mc_predict_proba(
-                            X_u,
-                            T=args.mc_T,
-                            base_seed=mc_seed,
-                        )
-                        scores = entropy_rows(probs)
-                    else:  # mc_bald
-                        probs_T = wrapper.mc_predict_proba_T(
-                            X_u,
-                            T=args.mc_T,
-                            base_seed=mc_seed,
-                        )
-                        scores = bald_score(probs_T)
-
-                    k_eff = min(k, len(cand_ids))
-                    top_local = np.argpartition(scores, -k_eff)[-k_eff:]
-                    top_local = top_local[np.argsort(scores[top_local])[::-1]]
-                    cycle_ask_ids = [int(cand_ids[int(j)]) for j in top_local]
-
-                ask_log.append({
-                    "cycle": cycle + 1,
-                    "ask_ids": cycle_ask_ids,
-                })
-
-                for ask_id in cycle_ask_ids:
-                    y_new = oracle.label(active_ds.data[int(ask_id)][0])
-                    active_ds.update(int(ask_id), y_new)
-
-            # --------------------------------------------------------
-            # 2c) EGL-FC — one scoring pass per cycle
-            # --------------------------------------------------------
-            elif args.strategy == "egl_fc":
-                cand_seed = int(args.seed + 10_000 * cycle + asked)
-
-                cand_ids, X_u = get_candidate_pool(
-                    active_ds,
-                    candidate_size=args.candidate_size,
-                    rng_seed=cand_seed,
-                )
-
-                if len(cand_ids) == 0:
-                    cycle_ask_ids = []
-                else:
+                elif args.strategy == "egl_fc":
                     probs = wrapper.predict_proba(X_u)
                     emb = wrapper.extract_embeddings(X_u)
                     scores = egl_fc_score(emb, probs)
 
+                else:
+                    raise ValueError(f"Unknown strategy: {args.strategy}")
+
+                # ============================================================
+                # 3) Select batch
+                # ============================================================
+
+                # ---------- Diverse strategies ----------
+                if args.strategy.endswith("_diverse"):
+
+                    M = min(len(cand_ids), args.top_m_mult * k)
+
+                    top_local = np.argpartition(scores, -M)[-M:]
+                    top_local = top_local[np.argsort(scores[top_local])[::-1]]
+
+                    X_top = X_u[top_local]
+                    E_top = wrapper.extract_embeddings(X_top)
+
+                    diverse_local = k_center_greedy(
+                        E_top,
+                        k=min(k, len(top_local)),
+                        seed=args.seed,
+                        first=0,
+                    )
+
+                    batch_local = top_local[diverse_local]
+                    cycle_ask_ids = [int(cand_ids[int(j)]) for j in batch_local]
+
+                # ---------- Non-diverse strategies ----------
+                else:
+
                     k_eff = min(k, len(cand_ids))
+
                     top_local = np.argpartition(scores, -k_eff)[-k_eff:]
                     top_local = top_local[np.argsort(scores[top_local])[::-1]]
+
                     cycle_ask_ids = [int(cand_ids[int(j)]) for j in top_local]
 
-                ask_log.append({
-                    "cycle": cycle + 1,
-                    "ask_ids": cycle_ask_ids,
-                })
+                # ============================================================
+                # 4) Query oracle + update dataset
+                # ============================================================
 
                 for ask_id in cycle_ask_ids:
-                    y_new = oracle.label(active_ds.data[int(ask_id)][0])
-                    active_ds.update(int(ask_id), y_new)
-
-            # --------------------------------------------------------
-            # 2d) Random / other libact strategies
-            # --------------------------------------------------------
-            else:
-                cycle_ask_ids = []
-
-                for _ in range(k):
-                    ask_id = int(qs.make_query())
-                    cycle_ask_ids.append(ask_id)
-
                     y_new = oracle.label(active_ds.data[int(ask_id)][0])
                     active_ds.update(int(ask_id), y_new)
 
