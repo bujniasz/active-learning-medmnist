@@ -164,6 +164,12 @@ def run_supervised_loop(model, train_loader, val_loader, *,
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(model_path)),
 
+            "init_size": -1,
+            "batch": -1,
+            "budget": -1,
+            "epc": -1,
+            "final_labeled_target": -1,
+
             "step_type": "epoch",
             "step": int(epoch + 1),
             "labeled_count": int(len(train_loader.dataset)),
@@ -308,6 +314,12 @@ if __name__ == "__main__":
             "strategy": "supervised",
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(args.model_path)),
+
+            "init_size": -1,
+            "batch": -1,
+            "budget": -1,
+            "epc": -1,
+            "final_labeled_target": -1,
 
             "step_type": "final",
             "step": -1,

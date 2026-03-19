@@ -64,14 +64,23 @@ def compute_best_x_by_strategy(df_val: pd.DataFrame) -> dict[str, int]:
         best_x[strat] = best_lc
     return best_x
 
-def build_model_path(data_dir: str, results_csv: str, strategy: str, init_size: int, batch: int, epc: int, seed: int) -> str:
+def build_model_path(
+    data_dir: str,
+    results_csv: str,
+    strategy: str,
+    init_size: int,
+    batch: int,
+    epc: int,
+    budget: int,
+    seed: int,
+) -> str:
     """
     Build deterministic model path:
-    models/{dataset}-{results_name}-{strategy}-{init_size}-{batch}-{epc}-{seed}.pth
+    models/{dataset}-{results_name}-{strategy}-{init_size}-{batch}-{epc}-{budget}-{seed}.pth
     """
     dataset = Path(data_dir).resolve().name
     results_name = Path(results_csv).stem
-    return f"models/{dataset}-{results_name}-{strategy}-{init_size}-{batch}-{epc}-{seed}.pth"
+    return f"models/{dataset}-{results_name}-{strategy}-{init_size}-{batch}-{epc}-{budget}-{seed}.pth"
 
 def plot_metric(
     df_val,
@@ -162,9 +171,9 @@ def main() -> None:
     p.add_argument("--init-sizes", nargs="+", type=int, default=[100], help="List of initial subset sizes")
     p.add_argument("--batches", nargs="+", type=int, default=[20], help="List of query batch sizes")
     p.add_argument("--epochs-per-cycles", nargs="+", type=int, default=[1], help="List of epochs per cycle")
+    p.add_argument("--budgets", nargs="+", type=int, default=[200], help="List of AL budgets")
     p.add_argument("--strategies", nargs="+", default=None, help="Strategies to run/plot. Auto-detected if --no-run")
     p.add_argument("--seeds", nargs="+", type=int, default=None, help="Seeds to run/plot. Auto-detected if --no-run")
-    
     p.add_argument("--results-csv", required=True, help="Path to shared CSV")
     p.add_argument("--train-script", default="src/train_active.py", help="Path to train_active.py")
     p.add_argument("--out-dir", default="results/plots", help="Where to write PNG plots")
@@ -199,12 +208,18 @@ def main() -> None:
         
         # Tworzenie kombinacji wszystkich parametrów
         grid = itertools.product(
-            args.data_dirs, args.init_sizes, args.batches, args.epochs_per_cycles, strategies, seeds
+            args.data_dirs,
+            args.init_sizes,
+            args.batches,
+            args.epochs_per_cycles,
+            args.budgets,
+            strategies,
+            seeds,
         )
 
-        for data_dir, init_size, batch, epc, strat, seed in grid:
+        for data_dir, init_size, batch, epc, budget, strat, seed in grid:
             model_path = build_model_path(
-                data_dir, args.results_csv, strat, init_size, batch, epc, seed
+                data_dir, args.results_csv, strat, init_size, batch, epc, budget, seed
             )
 
             cmd = [
@@ -217,6 +232,7 @@ def main() -> None:
                 "--seed", str(seed),
                 "--init-size", str(init_size),
                 "--batch", str(batch),
+                "--budget", str(budget),
                 "--epochs-per-cycle", str(epc)
             ]
             run_cmd(cmd)
@@ -239,17 +255,18 @@ def main() -> None:
         raise SystemExit("No rows found for plotting (phase=active, split=val, step_type=cycle).")
 
     # Wyciąganie parametrów z nazwy modelu przy użyciu Regex 
-    # (Format: dataset-resultscsv-strategy-initsize-batch-epc-seed.pth)
-    regex = r'-(?P<ext_strategy>[A-Za-z0-9_]+)-(?P<ext_init_size>\d+)-(?P<ext_batch>\d+)-(?P<ext_epc>\d+)-(?P<ext_seed>\d+)\.pth$'
+    # (Format: dataset-resultscsv-strategy-initsize-batch-epc-budget-seed.pth)
+    regex = r'-(?P<ext_strategy>[A-Za-z0-9_]+)-(?P<ext_init_size>\d+)-(?P<ext_batch>\d+)-(?P<ext_epc>\d+)-(?P<ext_budget>\d+)-(?P<ext_seed>\d+)\.pth$'
     extracted = df_val["model"].str.extract(regex)
     
-    for col in ["ext_init_size", "ext_batch", "ext_epc", "ext_seed"]:
+    for col in ["ext_init_size", "ext_batch", "ext_epc", "ext_budget", "ext_seed"]:
         extracted[col] = pd.to_numeric(extracted[col], errors="coerce")
 
     # Uzupełnienie DataFrame o wyekstrahowane dane
     df_val["init_size"] = extracted["ext_init_size"]
     df_val["batch"] = extracted["ext_batch"]
     df_val["epc"] = extracted["ext_epc"]
+    df_val["budget"] = extracted["ext_budget"]
 
     # Filtrowanie przy plotowaniu
     if args.datasets is not None:
@@ -270,12 +287,14 @@ def main() -> None:
         df_val = df_val[df_val["seed"].isin(seeds)]
         
     # Opcjonalne filtry, jeśli chcemy plotować tylko określone wielkości (gdy --no-run)
-    if args.init_sizes and not args.no_run:
+    if args.init_sizes:
         df_val = df_val[df_val["init_size"].isin(args.init_sizes)]
-    if args.batches and not args.no_run:
+    if args.batches:
         df_val = df_val[df_val["batch"].isin(args.batches)]
-    if args.epochs_per_cycles and not args.no_run:
+    if args.epochs_per_cycles:
         df_val = df_val[df_val["epc"].isin(args.epochs_per_cycles)]
+    if args.budgets:
+        df_val = df_val[df_val["budget"].isin(args.budgets)]
 
     if len(df_val) == 0:
         raise SystemExit("After filtering, no rows remain to plot.")
@@ -287,17 +306,17 @@ def main() -> None:
     color_map = make_color_map(strategies)
 
     # Generowanie wykresów w grupach, aby krzywe uczyły się na tych samych parametrach bazy
-    group_cols = ["dataset", "init_size", "batch", "epc"]
+    group_cols = ["dataset", "init_size", "batch", "epc", "budget"]
     valid_groups = df_val.dropna(subset=group_cols)
 
     for name, group_df in valid_groups.groupby(group_cols):
-        dataset_name, init_size, batch, epc = name
-        init_size, batch, epc = int(init_size), int(batch), int(epc)
+        dataset_name, init_size, batch, epc, budget = name
+        init_size, batch, epc, budget = int(init_size), int(batch), int(epc), int(budget)
         
         best_x = compute_best_x_by_strategy(group_df)
         
-        prefix = f"{dataset_name}_init{init_size}_b{batch}_epc{epc}"
-        title_suffix = f"(Init: {init_size}, Batch: {batch}, Epochs: {epc})"
+        prefix = f"{dataset_name}_init{init_size}_b{batch}_epc{epc}_budget{budget}"
+        title_suffix = f"(Init: {init_size}, Batch: {batch}, Epochs: {epc}, Budget: {budget})"
         
         plots = [
             ("acc",        f"{dataset_name} — Val Accuracy {title_suffix}", out_dir / f"{prefix}_val_acc.png"),

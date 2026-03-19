@@ -654,6 +654,12 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(model_path)),
 
+            "init_size": int(args.init_size),
+            "batch": int(args.batch),
+            "budget": int(budget),
+            "epc": int(args.epochs_per_cycle),
+            "final_labeled_target": int(args.init_size) + int(budget),
+
             "step_type": "cycle",
             "step": int(cycle),
             "labeled_count": int(labeled_cnt),
@@ -799,6 +805,12 @@ if __name__ == "__main__":
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(args.model_path)),
 
+            "init_size": int(args.init_size),
+            "batch": int(args.batch),
+            "budget": int(args.budget),
+            "epc": int(args.epochs_per_cycle),
+            "final_labeled_target": int(args.init_size) + int(args.budget),
+
             "step_type": "cycle",
             "step": 0,
             "labeled_count": int(labeled_cnt),
@@ -903,6 +915,12 @@ if __name__ == "__main__":
             "strategy": args.strategy,
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(args.model_path)),
+
+            "init_size": int(args.init_size),
+            "batch": int(args.batch),
+            "budget": int(args.budget),
+            "epc": int(args.epochs_per_cycle),
+            "final_labeled_target": int(args.init_size) + int(args.budget),
 
             "step_type": "final",
             "step": -1,
