@@ -30,6 +30,114 @@ from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_t
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def build_batch_schedule_from_budget(budget: int, n_cycles: int) -> list[int]:
+    if budget <= 0:
+        raise ValueError("budget must be > 0")
+    if n_cycles <= 0:
+        raise ValueError("n_cycles must be > 0")
+
+    base = budget // n_cycles
+    remainder = budget % n_cycles
+
+    if base <= 0:
+        raise ValueError(
+            f"Planned number of cycles ({n_cycles}) is too large for budget ({budget}); "
+            "would create empty batches."
+        )
+
+    schedule = [base] * n_cycles
+    schedule[-1] += remainder
+    return schedule
+
+def _pct_to_count(pct: float, total: int) -> int:
+    return max(1, int(round(total * float(pct) / 100.0)))
+
+def resolve_active_params(args, train_size: int) -> dict:
+    # init_size: absolute XOR percent
+    if args.init_size is not None and args.init_size_pct is not None:
+        raise ValueError("Use either --init-size or --init-size-pct, not both.")
+    if args.init_size is None and args.init_size_pct is None:
+        raise ValueError("One of --init-size / --init-size-pct is required.")
+
+    # budget: absolute XOR percent
+    if args.budget is not None and args.budget_pct is not None:
+        raise ValueError("Use either --budget or --budget-pct, not both.")
+    if args.budget is None and args.budget_pct is None:
+        raise ValueError("One of --budget / --budget-pct is required.")
+
+    # batch: absolute XOR percent-of-budget
+    if args.batch is not None and args.batch_pct_of_budget is not None:
+        raise ValueError("Use either --batch or --batch-pct-of-budget, not both.")
+    if args.batch is None and args.batch_pct_of_budget is None:
+        raise ValueError("One of --batch / --batch-pct-of-budget is required.")
+
+    # resolve init
+    if args.init_size_pct is not None:
+        init_size = _pct_to_count(args.init_size_pct, train_size)
+        init_size_pct = float(args.init_size_pct)
+    else:
+        init_size = int(args.init_size)
+        init_size_pct = 100.0 * init_size / train_size
+
+    # resolve budget
+    if args.budget_pct is not None:
+        budget = _pct_to_count(args.budget_pct, train_size)
+        budget_pct = float(args.budget_pct)
+    else:
+        budget = int(args.budget)
+        budget_pct = 100.0 * budget / train_size
+
+    if init_size <= 0:
+        raise ValueError("Resolved init_size must be > 0")
+    if budget <= 0:
+        raise ValueError("Resolved budget must be > 0")
+    if init_size >= train_size:
+        raise ValueError(f"Resolved init_size ({init_size}) must be smaller than train size ({train_size})")
+    if init_size + budget > train_size:
+        raise ValueError(
+            f"Resolved init_size + budget = {init_size + budget}, "
+            f"which exceeds train size ({train_size})"
+        )
+
+    # resolve batch / schedule
+    if args.batch_pct_of_budget is not None:
+        batch_pct_of_budget = float(args.batch_pct_of_budget)
+
+        if batch_pct_of_budget <= 0:
+            raise ValueError("--batch-pct-of-budget must be > 0")
+        if batch_pct_of_budget > 100:
+            raise ValueError("--batch-pct-of-budget must be <= 100")
+
+        n_cycles_planned = max(1, int(round(100.0 / batch_pct_of_budget)))
+        batch_schedule = build_batch_schedule_from_budget(budget, n_cycles_planned)
+        batch = int(batch_schedule[0])  # nominal / first batch for metadata
+    else:
+        batch = int(args.batch)
+        if batch <= 0:
+            raise ValueError("Resolved batch must be > 0")
+        if batch > budget:
+            raise ValueError(f"Resolved batch ({batch}) cannot be larger than budget ({budget})")
+
+        n_cycles_planned = int(np.ceil(budget / batch))
+        batch_schedule = [batch] * (budget // batch)
+        remainder = budget % batch
+        if remainder > 0:
+            batch_schedule[-1] += remainder
+
+        batch_pct_of_budget = 100.0 * batch / budget
+
+    return {
+        "init_size": int(init_size),
+        "budget": int(budget),
+        "batch": int(batch),
+        "init_size_pct": float(init_size_pct),
+        "budget_pct": float(budget_pct),
+        "batch_pct_of_budget": float(batch_pct_of_budget),
+        "final_labeled_target": int(init_size + budget),
+        "n_cycles_planned": int(n_cycles_planned),
+        "batch_schedule": [int(x) for x in batch_schedule],
+    }
+
 def get_candidate_pool(
     active_ds: Dataset,
     candidate_size: int,
@@ -67,39 +175,39 @@ def get_entropy_scores(X_u, wrapper):
     probs = wrapper.predict_proba(X_u)
     return entropy_rows(probs)
 
-def select_uncertainty_entropy_full_pool(active_ds: Dataset, wrapper, k: int) -> list[int]:
-    """Select top-k unlabeled samples by predictive entropy on the FULL pool.
+# def select_uncertainty_entropy_full_pool(active_ds: Dataset, wrapper, k: int) -> list[int]:
+#     """Select top-k unlabeled samples by predictive entropy on the FULL pool.
 
-    Implements:
-        x* = argmax_{x in U} ( - sum_i p(y_i|x) log p(y_i|x) )
+#     Implements:
+#         x* = argmax_{x in U} ( - sum_i p(y_i|x) log p(y_i|x) )
 
-    Notes:
-      - Uses wrapper.predict_proba on the full unlabeled pool.
-      - Deterministic forward pass assumed (dropout disabled in wrapper.predict_proba).
-      - Returns libact entry ids (integers compatible with active_ds.update()).
-    """
-    if k <= 0:
-        return []
+#     Notes:
+#       - Uses wrapper.predict_proba on the full unlabeled pool.
+#       - Deterministic forward pass assumed (dropout disabled in wrapper.predict_proba).
+#       - Returns libact entry ids (integers compatible with active_ds.update()).
+#     """
+#     if k <= 0:
+#         return []
 
-    # Official libact API: returns IDs and the corresponding feature matrix/array
-    unlabeled_entry_ids, X_pool = active_ds.get_unlabeled_entries()
-    if len(unlabeled_entry_ids) == 0:
-        return []
+#     # Official libact API: returns IDs and the corresponding feature matrix/array
+#     unlabeled_entry_ids, X_pool = active_ds.get_unlabeled_entries()
+#     if len(unlabeled_entry_ids) == 0:
+#         return []
 
-    probs = wrapper.predict_proba(X_pool)  # shape: (N, C)
+#     probs = wrapper.predict_proba(X_pool)  # shape: (N, C)
 
-    # Entropy: -sum p log p
-    eps = 1e-12
-    p = np.clip(probs, eps, 1.0)
-    scores = -np.sum(p * np.log(p), axis=1)  # shape: (N,)
+#     # Entropy: -sum p log p
+#     eps = 1e-12
+#     p = np.clip(probs, eps, 1.0)
+#     scores = -np.sum(p * np.log(p), axis=1)  # shape: (N,)
 
-    k = min(k, len(unlabeled_entry_ids))
+#     k = min(k, len(unlabeled_entry_ids))
 
-    # Top-k by entropy (descending)
-    top_idx = np.argpartition(scores, -k)[-k:]                # fast top-k (unordered)
-    top_idx = top_idx[np.argsort(scores[top_idx])[::-1]]      # sort those k desc
+#     # Top-k by entropy (descending)
+#     top_idx = np.argpartition(scores, -k)[-k:]                # fast top-k (unordered)
+#     top_idx = top_idx[np.argsort(scores[top_idx])[::-1]]      # sort those k desc
 
-    return [int(unlabeled_entry_ids[int(j)]) for j in top_idx]
+#     return [int(unlabeled_entry_ids[int(j)]) for j in top_idx]
 
 def bald_score(probs_T: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
@@ -373,9 +481,12 @@ def parse_args():
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
     p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv",
                help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
-    p.add_argument("--init-size", type=int, default=100)
-    p.add_argument("--budget", type=int, default=40)
-    p.add_argument("--batch", type=int, default=20, help="queries per AL cycle")
+    p.add_argument("--init-size", type=int, default=None)
+    p.add_argument("--budget", type=int, default=None)
+    p.add_argument("--batch", type=int, default=None, help="queries per AL cycle")
+    p.add_argument("--init-size-pct", type=float, default=None, help="Initial labeled set as percent of train set size")
+    p.add_argument("--budget-pct", type=float, default=None, help="AL budget as percent of train set size")
+    p.add_argument("--batch-pct-of-budget", type=float, default=None, help="Batch size as percent of resolved budget")
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
@@ -486,20 +597,47 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrap
     return active_ds, oracle, qs, init_idx
 
 # === TRAINING + VALIDATION LOOP === 
-def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
-                        budget: int, batch: int, model_path: str,
-                        select_metric: str = "acc",
-                        data_dir: str | None = None) -> str:
-    
-    asked = 0; cycle = 0; best_sel = float("-inf")
-    ask_log = []
-    Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
-    while asked < budget:
+# === TRAINING + VALIDATION LOOP ===
+def run_active_loop(
+    active_ds,
+    oracle,
+    qs,
+    wrapper,
+    X_val,
+    y_val,
+    budget: int,
+    batch: int,
+    batch_schedule: list[int],
+    model_path: str,
+    select_metric: str = "acc",
+    data_dir: str | None = None,
+    *,
+    resolved_init_size: int,
+    resolved_budget: int,
+    resolved_batch: int,
+    resolved_init_size_pct: float,
+    resolved_budget_pct: float,
+    resolved_batch_pct_of_budget: float,
+    final_labeled_target: int,
+    n_cycles_planned: int,
+) -> str:
 
-        k = min(batch, budget - asked)
+    # CHANGED: asked nadal trzymamy, ale cycle kontrolujemy przez enumerate(batch_schedule)
+    asked = 0
+    best_sel = float("-inf")
+    ask_log = []
+
+    Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
+
+    # CHANGED: zamiast while asked < budget używamy jawnego harmonogramu batchy
+    for cycle_idx, k in enumerate(batch_schedule, start=1):
+        if k <= 0:
+            continue
+
+        cycle = cycle_idx  # CHANGED: numer cyklu pochodzi z harmonogramu
 
         cand_seed = int(args.seed + 10_000 * cycle + asked)
-        mc_seed   = int(args.seed + 20_000 * cycle + asked)
+        mc_seed = int(args.seed + 20_000 * cycle + asked)
 
         # ============================================================
         # 0) Random strategy (libact) – sequential querying
@@ -516,7 +654,9 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
                 active_ds.update(ask_id, y_new)
 
             ask_log.append({
-                "cycle": cycle + 1,
+                "cycle": cycle,
+                "planned_batch_size": int(k),  # CHANGED: zapisujemy planowany rozmiar batcha
+                "actual_batch_size": int(len(cycle_ask_ids)),
                 "ask_ids": cycle_ask_ids,
             })
 
@@ -539,7 +679,6 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
                 # ============================================================
                 # 2) Compute uncertainty scores
                 # ============================================================
-
                 if args.strategy in ("uncertainty", "entropy_diverse"):
                     scores = get_entropy_scores(X_u, wrapper)
 
@@ -594,7 +733,6 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
 
                 # ---------- Non-diverse strategies ----------
                 else:
-
                     k_eff = min(k, len(cand_ids))
 
                     top_local = np.argpartition(scores, -k_eff)[-k_eff:]
@@ -605,27 +743,35 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
                 # ============================================================
                 # 4) Query oracle + update dataset
                 # ============================================================
-
                 for ask_id in cycle_ask_ids:
                     y_new = oracle.label(active_ds.data[int(ask_id)][0])
                     active_ds.update(int(ask_id), y_new)
 
                 ask_log.append({
-                    "cycle": cycle + 1,
+                    "cycle": cycle,
+                    "planned_batch_size": int(k),  # CHANGED: zapisujemy planowany rozmiar batcha
+                    "actual_batch_size": int(len(cycle_ask_ids)),
                     "ask_ids": cycle_ask_ids,
                 })
 
-        val_loss =  wrapper.train(active_ds, verbose=True)
-        asked += len(cycle_ask_ids)
-        cycle += 1
+        val_loss = wrapper.train(active_ds, verbose=True)
 
-        _, val_y_pred=get_predictions(wrapper.model, (X_val, y_val), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
+        # CHANGED: liczymy faktycznie zadane próbki, ale nie sterujemy już tym pętlą
+        asked += len(cycle_ask_ids)
+
+        _, val_y_pred = get_predictions(
+            wrapper.model,
+            (X_val, y_val),
+            DEVICE,
+            forward_kwargs={"backbone_mode": "eval", "enable_dropout": False},
+        )
 
         val_acc = accuracy_score(y_val, val_y_pred)
-        val_f1 = f1_score(y_val, val_y_pred, average='macro')
+        val_f1 = f1_score(y_val, val_y_pred, average="macro")
         val_proba = None
         val_auc = float("nan")
         val_ap = float("nan")
+
         if wrapper.num_classes == 2:
             val_proba = wrapper.predict_proba(X_val)[:, 1]
             val_auc = roc_auc_score(y_val, val_proba)
@@ -637,9 +783,23 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
             val_mean = float("-inf")
 
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
-        print(f"[cycle {cycle}/{int(budget / batch)}] "
-              f"labeled={labeled_cnt} train loss={val_loss:.4f} val_acc={val_acc:.4f} val_f1={val_f1:.4f} val_auc={val_auc:.4f} val_ap={val_ap:.4f} val_mean={val_mean:.4f}")
-        sel_map = {"mean": val_mean, "acc": val_acc, "f1": val_f1, "auc": val_auc, "ap": val_ap}
+
+        # CHANGED: używamy cycle/n_cycles_planned z harmonogramu
+        print(
+            f"[cycle {cycle}/{n_cycles_planned}] "
+            f"planned_batch={k} actual_batch={len(cycle_ask_ids)} "
+            f"labeled={labeled_cnt} train loss={val_loss:.4f} "
+            f"val_acc={val_acc:.4f} val_f1={val_f1:.4f} "
+            f"val_auc={val_auc:.4f} val_ap={val_ap:.4f} val_mean={val_mean:.4f}"
+        )
+
+        sel_map = {
+            "mean": val_mean,
+            "acc": val_acc,
+            "f1": val_f1,
+            "auc": val_auc,
+            "ap": val_ap,
+        }
         sel = float(sel_map[select_metric])
 
         if np.isnan(sel):
@@ -647,6 +807,7 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
 
         delta = getattr(args, "select_delta", 0.0)
         is_best = 1 if (sel > best_sel + delta) else 0
+
         append_row_to_csv({
             "dataset": os.path.basename(os.path.normpath(data_dir)) if data_dir else "",
             "phase": "active",
@@ -654,11 +815,14 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(model_path)),
 
-            "init_size": int(args.init_size),
-            "batch": int(args.batch),
-            "budget": int(budget),
+            "init_size": int(resolved_init_size),
+            "batch": int(resolved_batch),  # nominalny batch do metadanych
+            "budget": int(resolved_budget),
+            "init_size_pct": float(resolved_init_size_pct),
+            "budget_pct": float(resolved_budget_pct),
+            "batch_pct_of_budget": float(resolved_batch_pct_of_budget),
             "epc": int(args.epochs_per_cycle),
-            "final_labeled_target": int(args.init_size) + int(budget),
+            "final_labeled_target": int(final_labeled_target),
 
             "step_type": "cycle",
             "step": int(cycle),
@@ -674,19 +838,35 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
             "val_mean": fmt(val_mean),
             "select_metric": select_metric,
             "is_best": int(is_best),
-            "tp": -1, "fp": -1, "tn": -1, "fn": -1,
-        }, RESULTS_PATH)  
+            "tp": -1,
+            "fp": -1,
+            "tn": -1,
+            "fn": -1,
+        }, RESULTS_PATH)
+
         if sel > best_sel + delta:
             best_sel = sel
+
             torch.save({
                 "model_state_dict": wrapper.model.state_dict(),
                 "in_channels": wrapper.in_channels,
                 "num_classes": wrapper.num_classes,
                 "data_dir": data_dir,
                 "strategy": args.strategy,
-                "init_size": int(args.init_size),
-                "batch": int(args.batch),
-                "budget": int(args.budget),
+
+                "init_size": int(resolved_init_size),
+                "batch": int(resolved_batch),  # nominalny batch do metadanych
+                "budget": int(resolved_budget),
+                "init_size_pct": float(resolved_init_size_pct),
+                "budget_pct": float(resolved_budget_pct),
+                "batch_pct_of_budget": float(resolved_batch_pct_of_budget),
+                "epc": int(args.epochs_per_cycle),
+                "final_labeled_target": int(final_labeled_target),
+
+                # CHANGED: zapisujemy harmonogram batchy do checkpointu
+                "batch_schedule": [int(x) for x in batch_schedule],
+                "n_cycles_planned": int(n_cycles_planned),
+
                 "val_acc": float(val_acc),
                 "val_f1": float(val_f1),
                 "val_auc": float(val_auc),
@@ -698,13 +878,15 @@ def run_active_loop(active_ds, oracle, qs, wrapper, X_val, y_val,
                 "labeled_count": int(labeled_cnt),
                 "seed": int(args.seed),
             }, model_path)
+
             print(f"✅ NEW BEST (by {args.select_metric}) → {best_sel:.4f}")
-    
-    ask_log_path = Path(args.model_path).with_suffix(".asklog.json")
+
+    # CHANGED: ask log zapisujemy z model_path przekazanym do funkcji, nie z args.model_path
+    ask_log_path = Path(model_path).with_suffix(".asklog.json")
     with open(ask_log_path, "w") as f:
         json.dump(ask_log, f, indent=2)
 
-    print(f"📝 Ask log saved to: {ask_log_path}")  
+    print(f"📝 Ask log saved to: {ask_log_path}")
     return model_path
 
 # === MAIN LOOP ===
@@ -719,14 +901,6 @@ if __name__ == "__main__":
         model_filename = os.path.basename(args.model_path)
         model_name = os.path.splitext(model_filename)[0]
         RESULTS_PATH = os.path.join("results", model_name + ".csv")
-    
-    if args.batch <= 0: raise ValueError("--batch must be > 0")
-    if args.budget <= 0: raise ValueError("--budget must be > 0")
-    if args.budget % args.batch != 0:
-        raise ValueError(
-            f"Invalid combination: budget ({args.budget}) not divisible by batch ({args.batch}). "
-            "Each cycle must have the same number of samples."
-        )
 
     if args.eval_only:
         print("🔍 Mode: evaluation only (ACTIVE)")
@@ -748,9 +922,38 @@ if __name__ == "__main__":
         X, y, in_channels, num_classes = prepare_split_active(args.data_dir, split="train", to_nchw=True)
         print(f"📊 Detected: {num_classes} classes, {in_channels} channels\n")
 
+        train_size = int(len(y))
+        resolved = resolve_active_params(args, train_size=train_size)
+
+        resolved_init_size = int(resolved["init_size"])
+        resolved_budget = int(resolved["budget"])
+        resolved_batch = int(resolved["batch"])
+
+        resolved_init_size_pct = float(resolved["init_size_pct"])
+        resolved_budget_pct = float(resolved["budget_pct"])
+        resolved_batch_pct_of_budget = float(resolved["batch_pct_of_budget"])
+
+        final_labeled_target = int(resolved["final_labeled_target"])
+        n_cycles_planned = int(resolved["n_cycles_planned"])
+        resolved_batch_schedule = list(resolved["batch_schedule"])
+
+        print(
+            f"📐 Resolved AL params | "
+            f"train_size={train_size} | "
+            f"init_size={resolved_init_size} ({resolved_init_size_pct:.1f}%) | "
+            f"budget={resolved_budget} ({resolved_budget_pct:.1f}%) | "
+            f"batch={resolved_batch} ({resolved_batch_pct_of_budget:.1f}% of budget) | "
+            f"final_target={final_labeled_target} | "
+            f"planned_cycles={n_cycles_planned} | "
+            f"batch_schedule={resolved_batch_schedule}"
+        )
+
         wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle, seed=args.seed)
 
-        active_ds, oracle, qs, init_idx = init_libact(X, y, args.init_size, args.method, wrapper, seed=args.seed, strategy=args.strategy)
+        active_ds, oracle, qs, init_idx = init_libact(
+            X, y, resolved_init_size, args.method, wrapper,
+            seed=args.seed, strategy=args.strategy
+        )
 
         y = np.asarray(y)
         init_labels = y[init_idx]
@@ -805,11 +1008,14 @@ if __name__ == "__main__":
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(args.model_path)),
 
-            "init_size": int(args.init_size),
-            "batch": int(args.batch),
-            "budget": int(args.budget),
+            "init_size": int(resolved_init_size),
+            "batch": int(resolved_batch),
+            "budget": int(resolved_budget),
+            "init_size_pct": float(resolved_init_size_pct),
+            "budget_pct": float(resolved_budget_pct),
+            "batch_pct_of_budget": float(resolved_batch_pct_of_budget),
             "epc": int(args.epochs_per_cycle),
-            "final_labeled_target": int(args.init_size) + int(args.budget),
+            "final_labeled_target": int(final_labeled_target),
 
             "step_type": "cycle",
             "step": 0,
@@ -835,9 +1041,14 @@ if __name__ == "__main__":
             "num_classes": wrapper.num_classes,
             "data_dir": args.data_dir,
             "strategy": args.strategy,
-            "init_size": int(args.init_size),
-            "batch": int(args.batch),
-            "budget": int(args.budget),
+            "init_size": int(resolved_init_size),
+            "batch": int(resolved_batch),
+            "budget": int(resolved_budget),
+            "init_size_pct": float(resolved_init_size_pct),
+            "budget_pct": float(resolved_budget_pct),
+            "batch_pct_of_budget": float(resolved_batch_pct_of_budget),
+            "epc": int(args.epochs_per_cycle),
+            "final_labeled_target": int(final_labeled_target),
             "val_acc": float(start_val_acc),
             "val_f1": float(start_val_f1),
             "val_auc": float(start_val_auc),
@@ -852,12 +1063,28 @@ if __name__ == "__main__":
         print(f"💾 Saved initial (cycle 0) model → {args.model_path}")
 
         # Validation
-        best_ckpt = run_active_loop(active_ds, oracle, qs, wrapper,
-                                    X_val, y_val,
-                                    budget=args.budget, batch=args.batch,
-                                    model_path=args.model_path,
-                                    select_metric=args.select_metric,
-                                    data_dir=args.data_dir)
+        best_ckpt = run_active_loop(
+            active_ds,
+            oracle,
+            qs,
+            wrapper,
+            X_val,
+            y_val,
+            budget=resolved_budget,
+            batch=resolved_batch,
+            batch_schedule=resolved_batch_schedule,
+            model_path=args.model_path,
+            select_metric=args.select_metric,
+            data_dir=args.data_dir,
+            resolved_init_size=resolved_init_size,
+            resolved_budget=resolved_budget,
+            resolved_batch=resolved_batch,
+            resolved_init_size_pct=resolved_init_size_pct,
+            resolved_budget_pct=resolved_budget_pct,
+            resolved_batch_pct_of_budget=resolved_batch_pct_of_budget,
+            final_labeled_target=final_labeled_target,
+            n_cycles_planned=n_cycles_planned,
+        )
 
         # Test
         X_test, y_test, _, _ = prepare_split_active(args.data_dir, split="test", to_nchw=True)
@@ -916,11 +1143,14 @@ if __name__ == "__main__":
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(args.model_path)),
 
-            "init_size": int(args.init_size),
-            "batch": int(args.batch),
-            "budget": int(args.budget),
+            "init_size": int(resolved_init_size),
+            "batch": int(resolved_batch),
+            "budget": int(resolved_budget),
+            "init_size_pct": float(resolved_init_size_pct),
+            "budget_pct": float(resolved_budget_pct),
+            "batch_pct_of_budget": float(resolved_batch_pct_of_budget),
             "epc": int(args.epochs_per_cycle),
-            "final_labeled_target": int(args.init_size) + int(args.budget),
+            "final_labeled_target": int(final_labeled_target),
 
             "step_type": "final",
             "step": -1,

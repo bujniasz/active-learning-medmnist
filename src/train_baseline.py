@@ -167,9 +167,12 @@ def run_supervised_loop(model, train_loader, val_loader, *,
             "init_size": -1,
             "batch": -1,
             "budget": -1,
+            "init_size_pct": -1,
+            "budget_pct": -1,
+            "batch_pct_of_budget": -1,
             "epc": -1,
             "final_labeled_target": -1,
-
+            
             "step_type": "epoch",
             "step": int(epoch + 1),
             "labeled_count": int(len(train_loader.dataset)),
@@ -318,6 +321,9 @@ if __name__ == "__main__":
             "init_size": -1,
             "batch": -1,
             "budget": -1,
+            "init_size_pct": -1,
+            "budget_pct": -1,
+            "batch_pct_of_budget": -1,
             "epc": -1,
             "final_labeled_target": -1,
 

@@ -90,7 +90,9 @@ def append_row_to_csv(row: dict, csv_path: str):
 
     fieldnames = [
         "dataset", "phase", "strategy", "seed", "model",
-        "init_size", "batch", "budget", "epc", "final_labeled_target",
+        "init_size", "batch", "budget", 
+        "init_size_pct", "budget_pct", "batch_pct_of_budget",
+        "epc", "final_labeled_target",
         "step_type", "step", "labeled_count", "split",
         "train_loss", "acc", "f1_macro", "auc", "ap",
         "val_mean", "select_metric", "is_best",
