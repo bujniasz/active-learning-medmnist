@@ -23,13 +23,16 @@ from matplotlib.ticker import MultipleLocator
 
 STRATEGY_LABELS = {
     "random": "Random",
-    "uncertainty": "Entropy",
+    "least_confident": "Least confident",
+    "margin": "Margin Sampling",
+    "entropy": "Entropy",
+    "mc_entropy": "MC Entropy",
     "mc_bald": "BALD",
     "entropy_diverse": "Entropy + Diversity",
+    "mc_entropy_diverse": "MC Entropy + Diversity",
     "mc_bald_diverse": "BALD + Diversity",
     "egl_fc": "EGL",
 }
-
 
 def make_color_map(strategies: list[str]) -> dict[str, str]:
     """

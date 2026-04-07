@@ -12,14 +12,13 @@ from typing import Tuple, List
 import torch
 from torch import nn, optim
 from torch.utils.data import TensorDataset, DataLoader
-from torchvision.models import resnet18, ResNet18_Weights   
 
 # Sklearn
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_precision_score
 
 # Libact
 from libact.base.dataset import Dataset
-from libact.query_strategies import UncertaintySampling, RandomSampling
+from libact.query_strategies import RandomSampling
 from libact.labelers import IdealLabeler
 from libact.base.interfaces import ProbabilisticModel
 
@@ -162,6 +161,19 @@ def get_candidate_pool(
     rng = np.random.default_rng(int(rng_seed))
     idx = rng.choice(n, size=int(candidate_size), replace=False)
     return unlabeled_entry_ids[idx].astype(int), np.asarray(X_pool)[idx]
+
+def get_least_confident_scores(X_u, wrapper):
+    probs = wrapper.predict_proba(X_u)
+    return 1.0 - np.max(probs, axis=1)
+
+def margin_rows(probs: np.ndarray) -> np.ndarray:
+    top2 = np.partition(probs, -2, axis=1)[:, -2:]
+    top2 = np.sort(top2, axis=1)[:, ::-1]
+    return -(top2[:, 0] - top2[:, 1])
+
+def get_margin_scores(X_u, wrapper):
+    probs = wrapper.predict_proba(X_u)
+    return margin_rows(probs)
 
 def entropy_rows(probs: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
@@ -479,8 +491,7 @@ def parse_args():
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
     p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
-    p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv",
-               help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
+    p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv", help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
     p.add_argument("--init-size", type=int, default=None)
     p.add_argument("--budget", type=int, default=None)
     p.add_argument("--batch", type=int, default=None, help="queries per AL cycle")
@@ -489,15 +500,11 @@ def parse_args():
     p.add_argument("--batch-pct-of-budget", type=float, default=None, help="Batch size as percent of resolved budget")
     p.add_argument("--epochs-per-cycle", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--method", type=str, default="lc", choices=["lc", "sm", "entropy"])
-    p.add_argument("--select-metric", type=str, default="mean",
-                        choices=["mean", "acc", "f1", "auc", "ap"],
-                        help="Metric used to select the best checkpoint (mean = average of acc,f1,auc,ap)")
-    p.add_argument("--select-delta", type=float, default=1e-4,
-                    help="Minimum improvement required to save a new best checkpoint")
+    p.add_argument("--select-metric", type=str, default="mean", choices=["mean", "acc", "f1", "auc", "ap"], help="Metric used to select the best checkpoint (mean = average of acc,f1,auc,ap)")
+    p.add_argument("--select-delta", type=float, default=1e-4, help="Minimum improvement required to save a new best checkpoint")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--strategy", type=str, default="uncertainty", choices=["uncertainty", "random", "mc_entropy", "mc_bald", "mc_entropy_diverse", "mc_bald_diverse", "entropy_diverse", "egl_fc"], help="Query strategy")
-    p.add_argument("--mc-T", type=int, default=10, help="Number of MC Dropout forward passes")
+    p.add_argument("--strategy", type=str, default="entropy", choices=["least_confident", "margin", "entropy", "random", "mc_entropy", "mc_bald", "mc_entropy_diverse", "mc_bald_diverse", "entropy_diverse", "egl_fc"])
+    p.add_argument("--mc-T", type=int, default=5, help="Number of MC Dropout forward passes")
     p.add_argument("--candidate-size", type=int, default=-1, help="Unlabeled candidates to score each query (mc strategies)")
     p.add_argument("--top-m-mult", type=int, default=10, help="For diverse batch: candidates = top_m_mult * batch")
     return p.parse_args()
@@ -529,7 +536,7 @@ def set_seed(seed: int = 42):
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 # === AL START === 
-def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, method: str, wrapper: TorchModelWrapper, seed: int = 42, strategy="uncertainty"):
+def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, seed: int = 42, strategy="entropy"):
     rng = np.random.default_rng(seed)
 
     y = np.asarray(y)
@@ -679,7 +686,13 @@ def run_active_loop(
                 # ============================================================
                 # 2) Compute uncertainty scores
                 # ============================================================
-                if args.strategy in ("uncertainty", "entropy_diverse"):
+                if args.strategy == "least_confident":
+                    scores = get_least_confident_scores(X_u, wrapper)
+
+                elif args.strategy == "margin":
+                    scores = get_margin_scores(X_u, wrapper)
+
+                elif args.strategy in ("entropy", "entropy_diverse"):
                     scores = get_entropy_scores(X_u, wrapper)
 
                 elif args.strategy in ("mc_entropy", "mc_entropy_diverse"):
@@ -950,10 +963,7 @@ if __name__ == "__main__":
 
         wrapper = TorchModelWrapper(in_channels=in_channels, num_classes=num_classes, lr=args.lr, epochs_per_cycle=args.epochs_per_cycle, seed=args.seed)
 
-        active_ds, oracle, qs, init_idx = init_libact(
-            X, y, resolved_init_size, args.method, wrapper,
-            seed=args.seed, strategy=args.strategy
-        )
+        active_ds, oracle, qs, init_idx = init_libact(X, y, resolved_init_size, seed=args.seed, strategy=args.strategy)
 
         y = np.asarray(y)
         init_labels = y[init_idx]
