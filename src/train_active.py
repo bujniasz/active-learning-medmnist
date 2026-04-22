@@ -627,11 +627,12 @@ def run_active_loop(
     resolved_batch_pct_of_budget: float,
     final_labeled_target: int,
     n_cycles_planned: int,
+    initial_best_sel: float,
 ) -> str:
 
     # CHANGED: asked nadal trzymamy, ale cycle kontrolujemy przez enumerate(batch_schedule)
     asked = 0
-    best_sel = float("-inf")
+    best_sel = float(initial_best_sel)
     ask_log = []
 
     Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
@@ -1094,6 +1095,7 @@ if __name__ == "__main__":
             resolved_batch_pct_of_budget=resolved_batch_pct_of_budget,
             final_labeled_target=final_labeled_target,
             n_cycles_planned=n_cycles_planned,
+            initial_best_sel=best_sel,
         )
 
         # Test
