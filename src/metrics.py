@@ -82,6 +82,13 @@ def fmt(x, ndigits=4):
     except Exception:
         return ""
     
+def fmt_p_value(p: float) -> str:
+    if not np.isfinite(p):
+        return ""
+    if p < 1e-16:
+        return "<1e-16"
+    return f"{p:.2e}"
+    
 def append_row_to_csv(row: dict, csv_path: str):
     # ensure results dir exists
     out_dir = os.path.dirname(csv_path)

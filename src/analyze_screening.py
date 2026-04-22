@@ -10,8 +10,10 @@ from matplotlib.ticker import MultipleLocator, MaxNLocator
 from matplotlib.patches import Rectangle
 import numpy as np
 import pandas as pd
+from scipy.stats import wilcoxon
+from typing import cast
 
-from metrics import fmt
+from metrics import fmt, fmt_p_value
 
 
 # -----------------------------
@@ -85,15 +87,11 @@ def maybe_set_zoomed_yaxis(ax, y: pd.Series | np.ndarray) -> None:
         pad = max(0.005, 0.08 * (y_max - y_min if y_max > y_min else 0.01))
         ax.set_ylim(max(0.0, y_min - pad), min(1.0, y_max + pad))
 
-    # główne ticki
     ax.yaxis.set_major_locator(MultipleLocator(0.01))
-
-    # pomocnicze ticki
     ax.yaxis.set_minor_locator(MultipleLocator(0.005))
-
-    # siatka
     ax.grid(axis="y", which="major", alpha=0.35)
     ax.grid(axis="y", which="minor", alpha=0.15)
+
 
 # -----------------------------
 # Load + mode detection
@@ -288,7 +286,6 @@ def plot_absolute_colored_effect(
     pct_col: str,
     pretty_name: str,
 ) -> None:
-
     if abs_col not in summary.columns or pct_col not in summary.columns:
         return
 
@@ -310,7 +307,6 @@ def plot_absolute_colored_effect(
 
     tmp = tmp.dropna(subset=[abs_col, pct_col, "mean_aulc_norm"]).copy()
 
-    # sortowanie od najgorszego do najlepszego
     tmp = tmp.sort_values(
         by=["mean_aulc_norm", abs_col, pct_col],
         ascending=[True, True, True],
@@ -339,7 +335,6 @@ def plot_absolute_colored_effect(
         linewidth=1.0,
     )
 
-    # etykiety osi X — tylko wartości absolutne
     x_labels = [
         str(int(v)) if float(v).is_integer() else f"{v:g}"
         for v in tmp[abs_col]
@@ -348,10 +343,8 @@ def plot_absolute_colored_effect(
     ax.set_xticks(x_pos)
     ax.set_xticklabels(x_labels)
 
-    # legenda
     handles = []
     labels = []
-
     for lvl in pct_levels:
         handles.append(Rectangle((0, 0), 1, 1, color=color_map[lvl]))
         labels.append(f"{lvl:g}%")
@@ -364,17 +357,14 @@ def plot_absolute_colored_effect(
         framealpha=0.95,
     )
 
-    # polskie opisy
     ax.set_title(f"Wpływ parametru {pretty_name} (wartości absolutne)")
     ax.set_xlabel(f"{pretty_name} – wartość absolutna")
     ax.set_ylabel("Średni AULC (znormalizowany)")
 
     ax.grid(axis="y", alpha=0.3)
-
     maybe_set_zoomed_yaxis(ax, y_vals)
 
     fig.tight_layout()
-
     fig.savefig(aux_dir / f"{pretty_name}_absolute_colored.png", dpi=180)
     plt.close(fig)
 
@@ -398,7 +388,6 @@ def pairwise_compare_all(
         print(f"⚠️ Pairwise only works for >=2 values of {param_col}, got: {values}")
         return pd.DataFrame(), pd.DataFrame()
 
-    # Use coherent identifier space
     if use_pct_mode:
         base_cols = ["dataset", "strategy", "seed", "epc"]
         for c in ["init_size_pct", "budget_pct", "batch_pct_of_budget"]:
@@ -410,11 +399,8 @@ def pairwise_compare_all(
             if c in summary.columns:
                 base_cols.append(c)
 
-    # remove duplicates while preserving order
     seen = set()
     base_cols = [c for c in base_cols if not (c in seen or seen.add(c))]
-
-    # varied param cannot be part of pivot index
     base_cols = [c for c in base_cols if c != param_col]
 
     all_pw = []
@@ -486,6 +472,96 @@ def pairwise_compare_all(
         return pd.DataFrame(), pd.DataFrame()
 
     return pd.concat(all_pw, ignore_index=True), pd.concat(all_summary, ignore_index=True)
+
+
+# -----------------------------
+# Wilcoxon
+# -----------------------------
+def wilcoxon_from_pairwise(pw: pd.DataFrame, param_name: str) -> pd.DataFrame:
+    """
+    Computes paired Wilcoxon signed-rank tests from pairwise deltas.
+    Tests whether median(delta) differs from 0.
+
+    Output metrics:
+      - delta_aulc_norm
+      - delta_final
+    """
+    if len(pw) == 0:
+        return pd.DataFrame()
+
+    rows = []
+
+    metric_map = {
+        "delta_aulc_norm": "aulc_norm",
+        "delta_final": "final_metric",
+    }
+
+    for comparison, g in pw.groupby("comparison"):
+        v1 = g["v1"].iloc[0]
+        v2 = g["v2"].iloc[0]
+
+        for delta_col, metric_name in metric_map.items():
+            vals = pd.to_numeric(g[delta_col], errors="coerce").dropna().to_numpy()
+
+            n_pairs = int(len(vals))
+            if n_pairs == 0:
+                continue
+
+            nonzero_vals = vals[vals != 0]
+            n_nonzero = int(len(nonzero_vals))
+
+            median_delta = float(np.median(vals))
+            mean_delta = float(np.mean(vals))
+
+            if n_nonzero == 0:
+                stat = np.nan
+                p_value = np.nan
+                significant_005 = False
+                significant_001 = False
+            else:
+                try:
+                    result = cast(tuple[float, float], wilcoxon(
+                        vals,
+                        zero_method="wilcox",
+                        alternative="two-sided",
+                        method="auto",
+                    ))
+
+                    stat = float(result[0])
+                    p_value = float(result[1])
+                except ValueError:
+                    stat = np.nan
+                    p_value = np.nan
+
+                significant_005 = bool(p_value < 0.05) if np.isfinite(p_value) else False
+                significant_001 = bool(p_value < 0.01) if np.isfinite(p_value) else False
+
+            direction = "tie"
+            if median_delta > 0:
+                direction = "v1_better"
+            elif median_delta < 0:
+                direction = "v2_better"
+
+            rows.append(
+                {
+                    "param": param_name,
+                    "comparison": comparison,
+                    "v1": v1,
+                    "v2": v2,
+                    "metric": metric_name,
+                    "n_pairs": n_pairs,
+                    "n_nonzero": n_nonzero,
+                    "median_delta": median_delta,
+                    "mean_delta": mean_delta,
+                    "wilcoxon_stat": stat,
+                    "p_value": p_value,
+                    "significant_0.05": significant_005,
+                    "significant_0.01": significant_001,
+                    "direction": direction,
+                }
+            )
+
+    return pd.DataFrame(rows)
 
 
 # -----------------------------
@@ -599,7 +675,6 @@ def plot_screening_curves(
 
         key_dict = dict(zip(group_cols, key))
 
-        # krótszy tytuł: bez dataset
         fixed_parts = []
         for c in group_cols:
             if c == "dataset":
@@ -627,7 +702,6 @@ def plot_screening_curves(
         ax.set_ylabel(ylabel_map.get(metric, metric))
         ax.grid(alpha=0.3)
 
-        # pionowa linia startu
         ax.axvline(
             x_min,
             linestyle="--",
@@ -636,7 +710,6 @@ def plot_screening_curves(
             alpha=0.8,
         )
 
-        # podpis startu
         y_top = ax.get_ylim()[1]
         ax.text(
             x_min,
@@ -647,8 +720,6 @@ def plot_screening_curves(
             fontsize=9,
         )
 
-        # sensowniejsze ticki osi X:
-        # zawsze start, koniec i kilka punktów pośrednich
         if len(x_all) <= 10:
             xticks = x_all
         else:
@@ -821,7 +892,6 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
             ax_bar.yaxis.set_major_locator(MaxNLocator(integer=True))
             ax_bar.grid(axis="y", alpha=0.3)
 
-            # dynamiczne położenie boxa z podsumowaniem
             max_idx = int(np.argmax(counts))
             if max_idx == 0:
                 text_x = 0.98
@@ -984,6 +1054,8 @@ def main():
         "budget": param_cols["budget"],
     }
 
+    all_wilcoxon = []
+
     # --- main effects ---
     for pretty_name, param_col in analysis_plan.items():
         table = main_effects(summary, param_col)
@@ -1048,6 +1120,36 @@ def main():
         print(pw_summary_to_save.to_string(index=False))
 
         plot_pairwise_deltas(pw, out_dir, pretty_name)
+
+        # --- wilcoxon ---
+        wilcox_df = wilcoxon_from_pairwise(pw, pretty_name)
+        if len(wilcox_df) > 0:
+            wilcox_path = out_dir / f"wilcoxon_{pretty_name}.csv"
+
+            wilcox_to_save = format_numeric_columns(
+                wilcox_df,
+                cols=["v1", "v2", "median_delta", "mean_delta", "wilcoxon_stat"],
+            )
+            wilcox_to_save["p_value"] = wilcox_df["p_value"].apply(fmt_p_value)
+
+            wilcox_to_save.to_csv(wilcox_path, index=False)
+            all_wilcoxon.append(wilcox_df)
+
+            print(f"\nWilcoxon ({pretty_name}):")
+            print(wilcox_to_save.to_string(index=False))
+
+    if all_wilcoxon:
+        wilcoxon_all = pd.concat(all_wilcoxon, ignore_index=True)
+
+        wilcoxon_all_to_save = format_numeric_columns(
+            wilcoxon_all,
+            cols=["v1", "v2", "median_delta", "mean_delta", "wilcoxon_stat"],
+        )
+        wilcoxon_all_to_save["p_value"] = wilcoxon_all["p_value"].apply(fmt_p_value)
+
+        wilcoxon_all_path = out_dir / "wilcoxon_all.csv"
+        wilcoxon_all_to_save.to_csv(wilcoxon_all_path, index=False)
+        print("Saved:", wilcoxon_all_path)
 
     # --- screening curves ---
     for pretty_name, param_col in analysis_plan.items():
