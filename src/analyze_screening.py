@@ -13,16 +13,16 @@ import pandas as pd
 from scipy.stats import wilcoxon
 from typing import cast
 
-from metrics import fmt, fmt_p_value
-
+from metrics import load_config, fmt, fmt_p_value
 
 # -----------------------------
 # CLI
 # -----------------------------
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--results-csv", required=True, help="Path to results CSV")
-    p.add_argument("--out-dir", required=True, help="Directory for analysis outputs")
+    p.add_argument("-c", "--config", type=str, default=None, help="Path to YAML config file")
+    p.add_argument("--results-csv", default=None, help="Path to results CSV")
+    p.add_argument("--out-dir", default=None, help="Directory for analysis outputs")
     p.add_argument("--metric", default="val_mean", help="Metric used for AULC/final comparison")
     return p.parse_args()
 
@@ -30,6 +30,18 @@ def parse_args():
 # -----------------------------
 # Helpers
 # -----------------------------
+def apply_config(args):
+    if args.config is None:
+        return args
+
+    cfg = load_config(args.config)
+
+    args.results_csv = cfg.get("results_csv", args.results_csv)
+    args.out_dir = cfg.get("out_dir", args.out_dir)
+    args.metric = cfg.get("metric", args.metric)
+
+    return args
+
 def format_numeric_columns(df: pd.DataFrame, cols: list[str], ndigits: int = 4) -> pd.DataFrame:
     df = df.copy()
     for col in cols:
@@ -1016,6 +1028,14 @@ def plot_main_effects(
 # -----------------------------
 def main():
     args = parse_args()
+
+    args = apply_config(args)
+
+    if args.results_csv is None:
+        raise SystemExit("results_csv must be provided via CLI or config")
+
+    if args.out_dir is None:
+        raise SystemExit("out_dir must be provided via CLI or config")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -4,20 +4,18 @@ import os
 import argparse
 import random
 import numpy as np
-from typing import Literal
 
 # Torch
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torchvision.models import resnet18, ResNet18_Weights
 
 # Sklearn
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_precision_score
 
 # Custom
 from load_data import prepare_split_baseline
-from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
+from metrics import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
 
 """
 train_baseline.py
@@ -40,16 +38,14 @@ Example usage:
 # === ARGUMENTS ===
 def parse_args():
     p = argparse.ArgumentParser()
+    p.add_argument("-c", "--config", type=str, default=None, help="Path to YAML config file")
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
-    p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
-    p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv", 
-                        help="Global CSV log path (appends rows). Default: results/test-exps.csv")
-    p.add_argument("--select-metric", type=str, default="mean",
-                        choices=["mean", "acc", "f1", "auc", "ap"],
+    p.add_argument("-m", "--model-path", type=str, default=None, help="Path to the .pth model file (new or existing one)")
+    p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv", help="Global CSV log path")
+    p.add_argument("--select-metric", type=str, default="mean", choices=["mean", "acc", "f1", "auc", "ap"],
                         help="Metric used to select the best checkpoint (mean = average of acc,f1,auc,ap)")
-    p.add_argument("--select-delta", type=float, default=1e-4,
-                    help="Minimum improvement required to save a new best checkpoint")
+    p.add_argument("--select-delta", type=float, default=1e-4, help="Minimum improvement required to save a new best checkpoint")
     p.add_argument("--batch-size", type=int, default=64, help="Batch size for training")
     p.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
     p.add_argument("--seed", type=int, default=42)
@@ -83,6 +79,25 @@ def set_seed(seed: int = 42):
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def apply_config(args):
+    if args.config is None:
+        return args
+
+    cfg = load_config(args.config)
+
+    args.data_dir = cfg.get("data_dir", args.data_dir)
+    args.model_path = cfg.get("model_path", args.model_path)
+    args.results_path = cfg.get("results_path", args.results_path)
+
+    args.seed = cfg.get("seed", args.seed)
+    args.batch_size = cfg.get("batch_size", args.batch_size)
+    args.epochs = cfg.get("epochs", args.epochs)
+
+    args.select_metric = cfg.get("select_metric", args.select_metric)
+    args.select_delta = cfg.get("select_delta", args.select_delta)
+
+    return args
 
 # === MODEL BUILDER ===
 def get_model(num_classes, in_channels, dropout_p: float = 0.2):
@@ -215,6 +230,15 @@ def run_supervised_loop(model, train_loader, val_loader, *,
 if __name__ == "__main__":
 
     args = parse_args()
+
+    args = apply_config(args)
+
+    if args.model_path is None:
+        raise SystemExit("model_path must be provided either via CLI or config")
+
+    if not args.eval_only and args.data_dir is None:
+        raise SystemExit("data_dir must be provided either via CLI or config")
+
     set_seed(args.seed)
 
     if args.results_path is not None:

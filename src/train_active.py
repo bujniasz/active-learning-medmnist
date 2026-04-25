@@ -6,7 +6,6 @@ import argparse
 import random
 from pathlib import Path
 import json
-from typing import Tuple, List
 
 # Torch
 import torch
@@ -24,10 +23,56 @@ from libact.base.interfaces import ProbabilisticModel
 
 # Custom
 from load_data import prepare_split_active
-from metrics import get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
+from metrics import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+def apply_config(args):
+    if args.config is None:
+        return args
+
+    cfg = load_config(args.config)
+
+    args.data_dir = cfg.get("data_dir")
+    args.model_path = cfg.get("model_path")
+    args.results_path = cfg.get("results_path")
+
+    args.seed = cfg.get("seed", args.seed)
+    args.strategy = cfg.get("strategy", args.strategy)
+
+    al_mode = cfg.get("al_mode", "percent")
+
+    if al_mode == "percent":
+        args.init_size_pct = cfg.get("init_size_pct")
+        args.budget_pct = cfg.get("budget_pct")
+        args.batch_pct_of_budget = cfg.get("batch_pct_of_budget")
+
+        args.init_size = None
+        args.budget = None
+        args.batch = None
+
+    elif al_mode == "absolute":
+        args.init_size = cfg.get("init_size")
+        args.budget = cfg.get("budget")
+        args.batch = cfg.get("batch")
+
+        args.init_size_pct = None
+        args.budget_pct = None
+        args.batch_pct_of_budget = None
+
+    else:
+        raise ValueError(f"Unknown al_mode: {al_mode}")
+
+    args.epochs_per_cycle = cfg.get("epochs_per_cycle", args.epochs_per_cycle)
+    args.lr = cfg.get("lr", args.lr)
+    args.select_metric = cfg.get("select_metric", args.select_metric)
+    args.select_delta = cfg.get("select_delta", args.select_delta)
+    args.mc_T = cfg.get("mc_T", args.mc_T)
+    args.candidate_size = cfg.get("candidate_size", args.candidate_size)
+    args.top_m_mult = cfg.get("top_m_mult", args.top_m_mult)
+
+    return args
 
 def build_batch_schedule_from_budget(budget: int, n_cycles: int) -> list[int]:
     if budget <= 0:
@@ -488,9 +533,10 @@ class TorchModelWrapper(ProbabilisticModel):
 # === ARGUMENTS ===
 def parse_args():
     p = argparse.ArgumentParser(description="Active Learning on bloodmnist with libact")
+    p.add_argument("-c", "--config", type=str, default=None, help="Path to YAML config file")
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
-    p.add_argument("-m", "--model-path", type=str, required=True, help="Path to the .pth model file (new or existing one)")
+    p.add_argument("-m", "--model-path", type=str, default=None, help="Path to the .pth model file (new or existing one)")
     p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv", help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
     p.add_argument("--init-size", type=int, default=None)
     p.add_argument("--budget", type=int, default=None)
@@ -906,8 +952,12 @@ def run_active_loop(
 # === MAIN LOOP ===
 if __name__ == "__main__":
     args = parse_args()
+    args = apply_config(args)
 
     set_seed(args.seed)
+
+    if args.model_path is None:
+        raise SystemExit("model_path must be provided either via CLI or config")
     
     if args.results_path is not None:
         RESULTS_PATH = args.results_path

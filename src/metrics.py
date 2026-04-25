@@ -22,6 +22,7 @@ import pandas as pd
 import os
 import csv
 from typing import Any, Optional, Dict, Literal
+import yaml
 
 class ResNet18EmbedDropout(nn.Module):
     def __init__(self, in_channels: int, num_classes: int, dropout_p: float = 0.2):
@@ -69,6 +70,18 @@ class ResNet18EmbedDropout(nn.Module):
         x = self.dropout(x)
         logits = b.fc(x)
         return logits
+
+def load_config(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    if cfg is None:
+        return {}
+
+    if not isinstance(cfg, dict):
+        raise ValueError(f"Config file must contain a YAML mapping/object: {path}")
+
+    return cfg
 
 def fmt(x, ndigits=4):
     """

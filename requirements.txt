@@ -13,3 +13,4 @@ torch              # Główna biblioteka PyTorch - trenowanie modeli głębokieg
 torchvision        # Zawiera gotowe architektury (np. ResNet) oraz narzędzia do przetwarzania obrazów
 medmnist           # Zawiera przygotowane zbiory danych MedMNIST oraz interfejsy do ich ładowania
 tqdm               # Pasek postępu w pętlach treningowych i ewaluacyjnych
+pyyaml

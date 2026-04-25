@@ -1,0 +1,64 @@
+# =============================================================================
+# Config for: src/run.py (Baseline sweep)
+#
+# Run with:
+#   python3 src/run.py -c configs/experiment_launcher/baseline/default.yaml
+#
+# This config runs MULTIPLE baseline (fully supervised) trainings.
+#
+# Each combination of:
+#   - dataset
+#   - seed
+#
+# defines one independent run.
+#
+# Example:
+#   data_dirs: [data/bloodmnist, data/pathmnist]
+#   seeds: [1, 24]
+#
+# → will run 2 x 2 = 4 baseline experiments
+#
+# Results from all runs are appended to one CSV file.
+# =============================================================================
+
+# === Mode ===
+# Must be "baseline" for baseline experiments.
+mode: baseline
+
+# === Execution ===
+# Python executable to use.
+python: python3
+
+# Path to train_baseline.py script.
+baseline_train_script: src/train_baseline.py
+
+# If true: skip training and only reuse existing results.
+no_run: false
+
+# If true: delete existing results_csv before running.
+overwrite_results: false
+
+# === Data ===
+# List of dataset directories.
+# Example:
+#   - data/bloodmnist
+#   - data/pathmnist
+data_dirs:
+  - data/bloodmnist
+
+# === Output ===
+# CSV file where all experiment results will be stored.
+results_csv: results/baseline_official.csv
+
+# Directory for outputs (reserved for future use; plotting not used yet).
+out_dir: results/baseline_plots
+
+# === Reproducibility ===
+# List of random seeds.
+# Each seed defines one independent training run.
+seeds:
+  - 17
+  - 246
+  - 9012
+  - 34895
+  - 148932

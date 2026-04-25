@@ -1,0 +1,28 @@
+# =============================================================================
+# Config for: src/train_baseline.py
+#
+# Run with:
+#   python3 src/train_baseline.py -c configs/train_baseline/default.yaml
+#
+# This config runs ONE baseline (fully supervised) training.
+# Uses the full training dataset (no Active Learning).
+#
+# For multiple seeds / datasets use:
+#   src/run.py with configs/experiment_launcher/baseline/*.yaml
+# =============================================================================
+
+# === Data ===
+# Path to a prepared MedMNIST dataset directory.
+# Example: data/bloodmnist, data/octmnist, data/pathmnist
+data_dir: data/bloodmnist
+
+# === Output ===
+# Path where the best model checkpoint will be saved.
+model_path: models/bloodmnist-baseline-default.pth
+
+# Path to CSV file where validation/test metrics will be appended.
+results_path: results/run_BS-test.csv
+
+# === Reproducibility ===
+# Random seed used for NumPy, Python random and PyTorch.
+seed: 24

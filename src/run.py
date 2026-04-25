@@ -27,6 +27,8 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import MultipleLocator
 
+from metrics import load_config
+
 STRATEGY_LABELS = {
     "random": "Random",
     "least_confident": "Least confident",
@@ -40,6 +42,56 @@ STRATEGY_LABELS = {
     "egl_fc": "EGL",
 }
 
+def apply_config(args):
+    if args.config is None:
+        return args
+
+    cfg = load_config(args.config)
+
+    args.mode = cfg.get("mode", args.mode)
+
+    args.data_dirs = cfg.get("data_dirs", args.data_dirs)
+    args.results_csv = cfg.get("results_csv", args.results_csv)
+    args.train_script = cfg.get("train_script", args.train_script)
+    args.baseline_train_script = cfg.get("baseline_train_script", args.baseline_train_script)
+    args.out_dir = cfg.get("out_dir", args.out_dir)
+    args.python = cfg.get("python", args.python)
+    args.no_run = cfg.get("no_run", args.no_run)
+    args.overwrite_results = cfg.get("overwrite_results", args.overwrite_results)
+
+    args.datasets = cfg.get("datasets", args.datasets)
+    args.strategies = cfg.get("strategies", args.strategies)
+    args.seeds = cfg.get("seeds", args.seeds)
+
+    al_mode = cfg.get("al_mode", None)
+
+    if al_mode == "percent":
+        args.init_size_pcts = cfg.get("init_size_pcts", args.init_size_pcts)
+        args.batch_pcts_of_budget = cfg.get("batch_pcts_of_budget", args.batch_pcts_of_budget)
+        args.budget_pcts = cfg.get("budget_pcts", args.budget_pcts)
+
+        args.init_sizes = None
+        args.batches = None
+        args.budgets = None
+
+    elif al_mode == "absolute":
+        args.init_sizes = cfg.get("init_sizes", args.init_sizes)
+        args.batches = cfg.get("batches", args.batches)
+        args.budgets = cfg.get("budgets", args.budgets)
+
+        args.init_size_pcts = None
+        args.batch_pcts_of_budget = None
+        args.budget_pcts = None
+
+    elif al_mode is not None:
+        raise ValueError(f"Unknown al_mode: {al_mode}")
+
+    args.epochs_per_cycles = cfg.get("epochs_per_cycles", args.epochs_per_cycles)
+
+    args.batch_size = cfg.get("batch_size", args.batch_size)
+    args.baseline_epochs = cfg.get("baseline_epochs", args.baseline_epochs)
+
+    return args
 
 def make_color_map(strategies: list[str]) -> dict[str, str]:
     """
@@ -207,11 +259,13 @@ def main() -> None:
     p = argparse.ArgumentParser()
 
     # Data / execution
+    p.add_argument("-c", "--config", type=str, default=None,
+               help="Path to YAML config file")
     p.add_argument("--mode", choices=["active", "baseline"], default="active",
                    help="Run mode: active learning sweep or baseline sweep")
     p.add_argument("--data-dirs", nargs="+", default=None,
                    help="Paths to dataset folders (required unless --no-run)")
-    p.add_argument("--results-csv", required=True, help="Path to shared CSV")
+    p.add_argument("--results-csv", default=None, help="Path to shared CSV")
     p.add_argument("--train-script", default="src/train_active.py", help="Path to train_active.py")
     p.add_argument("--baseline-train-script", default="src/train_baseline.py", help="Path to train_baseline.py")
     p.add_argument("--out-dir", default="results/plots", help="Where to write PNG plots")
@@ -254,6 +308,11 @@ def main() -> None:
                    help="Number of epochs for baseline training")
 
     args = p.parse_args()
+
+    args = apply_config(args)
+
+    if args.results_csv is None:
+        raise SystemExit("results_csv must be provided either via CLI or config")
 
     results_csv = Path(args.results_csv)
     train_script = Path(args.train_script)

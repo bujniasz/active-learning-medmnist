@@ -1,0 +1,123 @@
+# =============================================================================
+# Config for: src/run.py (Active Learning sweep)
+#
+# Run with:
+#   python3 src/run.py -c configs/experiment_launcher/active/default.yaml
+#
+# This config runs MULTIPLE Active Learning experiments (grid search).
+#
+# Unlike train_active.yaml:
+#   - here you can provide MULTIPLE values (lists)
+#   - all combinations will be executed (Cartesian product)
+#
+# Example:
+#   seeds: [1, 24]
+#   strategies: [entropy, mc_entropy]
+#   epochs_per_cycles: [1, 5]
+#
+# → will run 2 x 2 x 2 = 8 experiments
+#
+# Results from all runs are appended to one CSV file.
+# =============================================================================
+
+# === Mode ===
+# Must be "active" for Active Learning experiments.
+mode: active
+
+# === Execution ===
+# Python executable to use.
+python: python3
+
+# Path to train_active.py script.
+train_script: src/train_active.py
+
+# If true: skip training and only generate plots from existing CSV.
+no_run: false
+
+# If true: delete existing results_csv before running.
+overwrite_results: false
+
+# === Data ===
+# List of dataset directories.
+# Example:
+#   - data/bloodmnist
+#   - data/pathmnist
+data_dirs:
+  - data/bloodmnist
+
+# === Output ===
+# CSV file where all experiment results will be stored.
+results_csv: results/run_BS-test.csv
+
+# Directory where plots will be saved.
+out_dir: results/screening_plots
+
+# === Reproducibility ===
+# List of random seeds.
+# Each seed defines one independent run.
+seeds:
+  - 1
+  - 24
+
+# === Strategies ===
+# List of Active Learning strategies.
+# Available:
+#   random
+#   least_confident
+#   margin
+#   entropy
+#   mc_entropy
+#   mc_bald
+#   entropy_diverse
+#   mc_entropy_diverse
+#   mc_bald_diverse
+#   egl_fc
+strategies:
+  - mc_entropy_diverse
+
+# === Active Learning mode ===
+# How to specify init size / budget / batch size.
+# Available:
+#   percent  - use *_pcts fields
+#   absolute - use absolute integer fields
+al_mode: percent
+
+# === Percent mode ===
+# Lists of values (will be combined in grid search).
+#
+# init_size_pcts: initial labeled set size (% of train set)
+# batch_pcts_of_budget: query batch size (% of budget)
+# budget_pcts: total labeling budget (% of train set)
+init_size_pcts:
+  - 1
+
+batch_pcts_of_budget:
+  - 10
+
+budget_pcts:
+  - 30
+
+# === Absolute mode ===
+# Used only when al_mode: absolute
+# (set percent fields to null if using this mode)
+#
+# init_sizes: initial labeled set size (number of samples)
+# batches: query batch size (number of samples)
+# budgets: total labeling budget (number of samples)
+init_sizes: null
+batches: null
+budgets: null
+
+# === Training ===
+# Number of epochs per AL cycle.
+# Can be a list → each value creates separate experiments.
+epochs_per_cycles:
+  - 5
+
+# === Plot filters ===
+# Optional filtering when plotting results.
+# Example:
+#   datasets: [bloodmnist]
+#
+# Set to null to include all datasets.
+datasets: null
