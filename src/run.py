@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Run a comprehensive Active Learning sweep and generate validation plots.
+"""Run experiment sweeps and generate validation plots.
 
-This script:
-  1) Runs train_active.py for a grid of AL configurations
-  2) Reads the shared results CSV
-  3) Uses parameter columns already stored in CSV
-  4) Produces validation plots grouped by dataset and training hyperparameters
+This script supports two modes:
+
+1) Active Learning sweep:
+   - runs train_active.py for a grid of AL configurations
+   - reads the shared results CSV
+   - produces validation plots grouped by dataset and AL hyperparameters
+
+2) Baseline sweep:
+   - runs train_baseline.py for selected datasets and seeds
+   - writes results to the shared CSV
+   - does not generate plots
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ STRATEGY_LABELS = {
     "mc_bald_diverse": "BALD + Diversity",
     "egl_fc": "EGL",
 }
+
 
 def make_color_map(strategies: list[str]) -> dict[str, str]:
     """
@@ -84,12 +91,26 @@ def build_model_path(
     seed: int,
 ) -> str:
     """
-    Build deterministic model path:
+    Build deterministic active model path:
     models/{dataset}-{results_name}-{strategy}-{config_tag}-{seed}.pth
     """
     dataset = Path(data_dir).resolve().name
     results_name = Path(results_csv).stem
     return f"models/{dataset}-{results_name}-{strategy}-{config_tag}-{seed}.pth"
+
+
+def build_baseline_model_path(
+    data_dir: str,
+    results_csv: str,
+    seed: int,
+) -> str:
+    """
+    Build deterministic baseline model path:
+    models/{dataset}-{results_name}-baseline-{seed}.pth
+    """
+    dataset = Path(data_dir).resolve().name
+    results_name = Path(results_csv).stem
+    return f"models/{dataset}-{results_name}-baseline-{seed}.pth"
 
 
 def pct_str(x: float) -> str:
@@ -122,7 +143,6 @@ def plot_metric(
         strat = str(strat)
         line_color = color_map.get(strat, None)
 
-        # mean over seeds for each labeled_count
         seed_df = (
             d.groupby(["seed", "labeled_count"])[metric]
             .mean()
@@ -187,10 +207,13 @@ def main() -> None:
     p = argparse.ArgumentParser()
 
     # Data / execution
+    p.add_argument("--mode", choices=["active", "baseline"], default="active",
+                   help="Run mode: active learning sweep or baseline sweep")
     p.add_argument("--data-dirs", nargs="+", default=None,
                    help="Paths to dataset folders (required unless --no-run)")
     p.add_argument("--results-csv", required=True, help="Path to shared CSV")
     p.add_argument("--train-script", default="src/train_active.py", help="Path to train_active.py")
+    p.add_argument("--baseline-train-script", default="src/train_baseline.py", help="Path to train_baseline.py")
     p.add_argument("--out-dir", default="results/plots", help="Where to write PNG plots")
     p.add_argument("--python", default=sys.executable, help="Python executable to use")
     p.add_argument("--no-run", action="store_true", help="Skip running training; just plot from CSV")
@@ -220,67 +243,81 @@ def main() -> None:
     p.add_argument("--batch-pcts-of-budget", nargs="+", type=float, default=None,
                    help="List of batch sizes as percent of resolved budget")
 
-    # Other params
+    # Active params
     p.add_argument("--epochs-per-cycles", nargs="+", type=int, default=[1],
-                   help="List of epochs per cycle")
+                   help="List of epochs per active learning cycle")
+
+    # Baseline params
+    p.add_argument("--batch-size", type=int, default=64,
+                   help="Batch size for baseline training")
+    p.add_argument("--baseline-epochs", type=int, default=3,
+                   help="Number of epochs for baseline training")
 
     args = p.parse_args()
 
     results_csv = Path(args.results_csv)
     train_script = Path(args.train_script)
+    baseline_train_script = Path(args.baseline_train_script)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.no_run:
         if args.data_dirs is None:
             raise SystemExit("--data-dirs is required unless --no-run")
-        if args.strategies is None or args.seeds is None:
-            raise SystemExit("--strategies and --seeds are required unless --no-run")
+        if args.seeds is None:
+            raise SystemExit("--seeds is required unless --no-run")
+        if args.mode == "active" and args.strategies is None:
+            raise SystemExit("--strategies is required for active mode unless --no-run")
 
-    # ---- mode validation ----
-    use_pct_init = args.init_size_pcts is not None
-    use_pct_batch = args.batch_pcts_of_budget is not None
-    use_pct_budget = args.budget_pcts is not None
+    # ---- active mode validation ----
+    if args.mode == "active":
+        use_pct_init = args.init_size_pcts is not None
+        use_pct_batch = args.batch_pcts_of_budget is not None
+        use_pct_budget = args.budget_pcts is not None
 
-    use_abs_init = args.init_sizes is not None
-    use_abs_batch = args.batches is not None
-    use_abs_budget = args.budgets is not None
+        use_abs_init = args.init_sizes is not None
+        use_abs_batch = args.batches is not None
+        use_abs_budget = args.budgets is not None
 
-    if use_abs_init and use_pct_init:
-        raise SystemExit("Use either --init-sizes or --init-size-pcts, not both.")
-    if use_abs_batch and use_pct_batch:
-        raise SystemExit("Use either --batches or --batch-pcts-of-budget, not both.")
-    if use_abs_budget and use_pct_budget:
-        raise SystemExit("Use either --budgets or --budget-pcts, not both.")
+        if use_abs_init and use_pct_init:
+            raise SystemExit("Use either --init-sizes or --init-size-pcts, not both.")
+        if use_abs_batch and use_pct_batch:
+            raise SystemExit("Use either --batches or --batch-pcts-of-budget, not both.")
+        if use_abs_budget and use_pct_budget:
+            raise SystemExit("Use either --budgets or --budget-pcts, not both.")
 
-    pct_flags = [use_pct_init, use_pct_batch, use_pct_budget]
-    abs_flags = [use_abs_init, use_abs_batch, use_abs_budget]
+        pct_flags = [use_pct_init, use_pct_batch, use_pct_budget]
+        abs_flags = [use_abs_init, use_abs_batch, use_abs_budget]
 
-    use_pct_mode = any(pct_flags)
-    use_abs_mode = any(abs_flags)
+        use_pct_mode = any(pct_flags)
+        use_abs_mode = any(abs_flags)
 
-    if use_pct_mode and not all(pct_flags):
-        raise SystemExit(
-            "For percentage mode, provide all of: "
-            "--init-size-pcts, --batch-pcts-of-budget, --budget-pcts"
-        )
+        if use_pct_mode and not all(pct_flags):
+            raise SystemExit(
+                "For percentage mode, provide all of: "
+                "--init-size-pcts, --batch-pcts-of-budget, --budget-pcts"
+            )
 
-    if use_abs_mode and not all(abs_flags):
-        raise SystemExit(
-            "For absolute mode, provide all of: "
-            "--init-sizes, --batches, --budgets"
-        )
+        if use_abs_mode and not all(abs_flags):
+            raise SystemExit(
+                "For absolute mode, provide all of: "
+                "--init-sizes, --batches, --budgets"
+            )
 
-    if not args.no_run and not use_pct_mode and not use_abs_mode:
-        raise SystemExit(
-            "Provide either absolute AL params "
-            "(--init-sizes, --batches, --budgets) "
-            "or percentage AL params "
-            "(--init-size-pcts, --batch-pcts-of-budget, --budget-pcts)."
-        )
+        if not args.no_run and not use_pct_mode and not use_abs_mode:
+            raise SystemExit(
+                "Provide either absolute AL params "
+                "(--init-sizes, --batches, --budgets) "
+                "or percentage AL params "
+                "(--init-size-pcts, --batch-pcts-of-budget, --budget-pcts)."
+            )
 
-    if use_pct_mode and use_abs_mode:
-        raise SystemExit("Cannot mix percentage mode and absolute mode in one run.")
+        if use_pct_mode and use_abs_mode:
+            raise SystemExit("Cannot mix percentage mode and absolute mode in one run.")
+
+    else:
+        use_pct_mode = False
+        use_abs_mode = False
 
     if args.overwrite_results and results_csv.exists():
         print(f"🧹 Removing existing results CSV: {results_csv}")
@@ -290,92 +327,124 @@ def main() -> None:
     # 1) RUN TRAINING (GRID SEARCH)
     # -----------------------------
     if not args.no_run:
-        strategies = list(map(str, args.strategies))
         seeds = list(args.seeds)
 
-        if use_pct_mode:
+        if args.mode == "baseline":
             grid = itertools.product(
                 args.data_dirs,
-                args.init_size_pcts,
-                args.batch_pcts_of_budget,
-                args.epochs_per_cycles,
-                args.budget_pcts,
-                strategies,
                 seeds,
             )
 
-            for data_dir, init_pct, batch_pct, epc, budget_pct, strat, seed in grid:
-                config_tag = (
-                    f"init{pct_str(init_pct)}p-"
-                    f"batch{pct_str(batch_pct)}pb-"
-                    f"epc{epc}-"
-                    f"budget{pct_str(budget_pct)}p"
-                )
-
-                model_path = build_model_path(
+            for data_dir, seed in grid:
+                model_path = build_baseline_model_path(
                     data_dir=data_dir,
                     results_csv=args.results_csv,
-                    strategy=strat,
-                    config_tag=config_tag,
                     seed=seed,
                 )
 
                 cmd = [
                     args.python,
-                    str(train_script),
+                    str(baseline_train_script),
                     "-d", str(data_dir),
                     "-m", str(model_path),
                     "-r", str(results_csv),
-                    "--strategy", str(strat),
+                    "--batch-size", str(args.batch_size),
+                    "--epochs", str(args.baseline_epochs),
                     "--seed", str(seed),
-                    "--init-size-pct", str(init_pct),
-                    "--batch-pct-of-budget", str(batch_pct),
-                    "--budget-pct", str(budget_pct),
-                    "--epochs-per-cycle", str(epc),
                 ]
+
                 run_cmd(cmd)
 
         else:
-            grid = itertools.product(
-                args.data_dirs,
-                args.init_sizes,
-                args.batches,
-                args.epochs_per_cycles,
-                args.budgets,
-                strategies,
-                seeds,
-            )
+            strategies = list(map(str, args.strategies))
 
-            for data_dir, init_size, batch, epc, budget, strat, seed in grid:
-                config_tag = (
-                    f"init{init_size}-"
-                    f"batch{batch}-"
-                    f"epc{epc}-"
-                    f"budget{budget}"
+            if use_pct_mode:
+                grid = itertools.product(
+                    args.data_dirs,
+                    args.init_size_pcts,
+                    args.batch_pcts_of_budget,
+                    args.epochs_per_cycles,
+                    args.budget_pcts,
+                    strategies,
+                    seeds,
                 )
 
-                model_path = build_model_path(
-                    data_dir=data_dir,
-                    results_csv=args.results_csv,
-                    strategy=strat,
-                    config_tag=config_tag,
-                    seed=seed,
+                for data_dir, init_pct, batch_pct, epc, budget_pct, strat, seed in grid:
+                    config_tag = (
+                        f"init{pct_str(init_pct)}p-"
+                        f"batch{pct_str(batch_pct)}pb-"
+                        f"epc{epc}-"
+                        f"budget{pct_str(budget_pct)}p"
+                    )
+
+                    model_path = build_model_path(
+                        data_dir=data_dir,
+                        results_csv=args.results_csv,
+                        strategy=strat,
+                        config_tag=config_tag,
+                        seed=seed,
+                    )
+
+                    cmd = [
+                        args.python,
+                        str(train_script),
+                        "-d", str(data_dir),
+                        "-m", str(model_path),
+                        "-r", str(results_csv),
+                        "--strategy", str(strat),
+                        "--seed", str(seed),
+                        "--init-size-pct", str(init_pct),
+                        "--batch-pct-of-budget", str(batch_pct),
+                        "--budget-pct", str(budget_pct),
+                        "--epochs-per-cycle", str(epc),
+                    ]
+                    run_cmd(cmd)
+
+            else:
+                grid = itertools.product(
+                    args.data_dirs,
+                    args.init_sizes,
+                    args.batches,
+                    args.epochs_per_cycles,
+                    args.budgets,
+                    strategies,
+                    seeds,
                 )
 
-                cmd = [
-                    args.python,
-                    str(train_script),
-                    "-d", str(data_dir),
-                    "-m", str(model_path),
-                    "-r", str(results_csv),
-                    "--strategy", str(strat),
-                    "--seed", str(seed),
-                    "--init-size", str(init_size),
-                    "--batch", str(batch),
-                    "--budget", str(budget),
-                    "--epochs-per-cycle", str(epc),
-                ]
-                run_cmd(cmd)
+                for data_dir, init_size, batch, epc, budget, strat, seed in grid:
+                    config_tag = (
+                        f"init{init_size}-"
+                        f"batch{batch}-"
+                        f"epc{epc}-"
+                        f"budget{budget}"
+                    )
+
+                    model_path = build_model_path(
+                        data_dir=data_dir,
+                        results_csv=args.results_csv,
+                        strategy=strat,
+                        config_tag=config_tag,
+                        seed=seed,
+                    )
+
+                    cmd = [
+                        args.python,
+                        str(train_script),
+                        "-d", str(data_dir),
+                        "-m", str(model_path),
+                        "-r", str(results_csv),
+                        "--strategy", str(strat),
+                        "--seed", str(seed),
+                        "--init-size", str(init_size),
+                        "--batch", str(batch),
+                        "--budget", str(budget),
+                        "--epochs-per-cycle", str(epc),
+                    ]
+                    run_cmd(cmd)
+
+    if args.mode == "baseline":
+        print("\n✅ Baseline sweep finished.")
+        return
 
     # -----------------------------
     # 2) PLOT FROM CSV
@@ -394,7 +463,6 @@ def main() -> None:
     if len(df_val) == 0:
         raise SystemExit("No rows found for plotting (phase=active, split=val, step_type=cycle).")
 
-    # Use CSV columns directly instead of parsing model names
     numeric_cols = [
         "seed",
         "init_size",
@@ -460,10 +528,6 @@ def main() -> None:
 
     color_map = make_color_map(strategies)
 
-    # Decide plotting/grouping mode:
-    # 1) If CLI explicitly selected percentage mode -> use pct grouping
-    # 2) Else if CSV has pct columns and absolute columns are all missing -> use pct grouping
-    # 3) Otherwise default to absolute grouping
     has_pct_cols = all(c in df_val.columns for c in ["init_size_pct", "batch_pct_of_budget", "budget_pct"])
     has_abs_cols = all(c in df_val.columns for c in ["init_size", "batch", "budget"])
 
