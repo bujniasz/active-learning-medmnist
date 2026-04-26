@@ -1,8 +1,8 @@
 # =============================================================================
-# Config for: src/run.py (Baseline sweep)
+# Config for: src/run_experiments.py (Baseline sweep)
 #
 # Run with:
-#   python3 src/run.py -c configs/experiment_launcher/baseline/default.yaml
+#   python3 src/run_experiments.py -c configs/run_experiments/baseline/default.yaml
 #
 # This config runs MULTIPLE baseline (fully supervised) trainings.
 #
@@ -48,17 +48,14 @@ data_dirs:
 
 # === Output ===
 # CSV file where all experiment results will be stored.
-results_csv: results/baseline_official.csv
+results_csv: results/baseline_patience-test.csv
 
 # Directory for outputs (reserved for future use; plotting not used yet).
-out_dir: results/baseline_plots
+out_dir: results/baseline_patience-test
 
 # === Reproducibility ===
 # List of random seeds.
 # Each seed defines one independent training run.
 seeds:
-  - 17
-  - 246
-  - 9012
-  - 34895
-  - 148932
+  - 15
+  - 547

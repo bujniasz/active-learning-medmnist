@@ -15,7 +15,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_pre
 
 # Custom
 from load_data import prepare_split_baseline
-from metrics import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
+from shared import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
 
 """
 train_baseline.py
@@ -47,7 +47,8 @@ def parse_args():
                         help="Metric used to select the best checkpoint (mean = average of acc,f1,auc,ap)")
     p.add_argument("--select-delta", type=float, default=1e-4, help="Minimum improvement required to save a new best checkpoint")
     p.add_argument("--batch-size", type=int, default=64, help="Batch size for training")
-    p.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
+    p.add_argument("--max-epochs", type=int, default=33, help="Maximum number of training epochs")
+    p.add_argument("--patience", type=int, default=5, help="Early stopping patience")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -89,13 +90,7 @@ def apply_config(args):
     args.data_dir = cfg.get("data_dir", args.data_dir)
     args.model_path = cfg.get("model_path", args.model_path)
     args.results_path = cfg.get("results_path", args.results_path)
-
     args.seed = cfg.get("seed", args.seed)
-    args.batch_size = cfg.get("batch_size", args.batch_size)
-    args.epochs = cfg.get("epochs", args.epochs)
-
-    args.select_metric = cfg.get("select_metric", args.select_metric)
-    args.select_delta = cfg.get("select_delta", args.select_delta)
 
     return args
 
@@ -114,14 +109,16 @@ def get_num_classes(model) -> int | None:
 
 # === TRAINING + VALIDATION LOOP === 
 def run_supervised_loop(model, train_loader, val_loader, *,
-                        epochs: int, select_metric: str,
+                        max_epochs: int, patience: int, 
+                        select_metric: str,
                         model_path: str, data_dir: str,
                         in_channels: int, num_classes: int) -> str:
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     best_sel = float("-inf")
+    epochs_without_improvement = 0
 
-    for epoch in range(epochs):
+    for epoch in range(max_epochs):
         # --- train ---
         model.train()
         running_loss, total, correct = 0.0, 0, 0
@@ -160,7 +157,7 @@ def run_supervised_loop(model, train_loader, val_loader, *,
         if np.isnan(val_mean):
             val_mean = float("-inf")
 
-        print(f"Epoch [{epoch+1}/{epochs}] - Loss: {avg_train_loss:.4f} - Train Acc: {train_acc:.4f} "
+        print(f"Epoch [{epoch+1}/{max_epochs}] - Loss: {avg_train_loss:.4f} - Train Acc: {train_acc:.4f} "
         f"- Val acc={val_acc:.4f} Val f1={val_f1:.4f} Val auc={val_auc:.4f} Val ap={val_ap:.4f} "
         f"Val mean={val_mean:.4f}")
 
@@ -207,6 +204,8 @@ def run_supervised_loop(model, train_loader, val_loader, *,
 
         if sel > best_sel + delta:
             best_sel = sel
+            epochs_without_improvement = 0
+
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'in_channels': in_channels,
@@ -221,9 +220,24 @@ def run_supervised_loop(model, train_loader, val_loader, *,
                 'select_metric': select_metric,
                 'best_metric': float(sel),
                 'best_epoch': int(epoch + 1),
+                'max_epochs': int(max_epochs),
+                'patience': int(patience),
                 "seed": int(args.seed),
             }, model_path)
+
             print(f"✅ NEW BEST (by {select_metric}) → {best_sel:.4f}")
+        else:
+            epochs_without_improvement += 1
+            print(
+                f"⏳ No improvement for {epochs_without_improvement}/{patience} epoch(s)"
+            )
+
+            if epochs_without_improvement >= patience:
+                print(
+                    f"🛑 Early stopping at epoch {epoch + 1}. "
+                    f"Best {select_metric}: {best_sel:.4f}"
+                )
+                break
     return model_path
 
 # === MAIN LOOP ===
@@ -282,12 +296,13 @@ if __name__ == "__main__":
         model = get_model(num_classes, in_channels).to(DEVICE)
 
         best_ckpt = run_supervised_loop(model, train_loader, val_loader,
-                                epochs=args.epochs,
-                                select_metric=args.select_metric,
-                                model_path=args.model_path,
-                                data_dir=DATA_DIR,
-                                in_channels=in_channels,
-                                num_classes=num_classes)
+                        max_epochs=args.max_epochs,
+                        patience=args.patience,
+                        select_metric=args.select_metric,
+                        model_path=args.model_path,
+                        data_dir=DATA_DIR,
+                        in_channels=in_channels,
+                        num_classes=num_classes)
 
         checkpoint = torch.load(best_ckpt, map_location=DEVICE)
         model.load_state_dict(checkpoint['model_state_dict'])

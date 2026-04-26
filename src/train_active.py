@@ -23,7 +23,7 @@ from libact.base.interfaces import ProbabilisticModel
 
 # Custom
 from load_data import prepare_split_active
-from metrics import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
+from shared import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -65,12 +65,6 @@ def apply_config(args):
         raise ValueError(f"Unknown al_mode: {al_mode}")
 
     args.epochs_per_cycle = cfg.get("epochs_per_cycle", args.epochs_per_cycle)
-    args.lr = cfg.get("lr", args.lr)
-    args.select_metric = cfg.get("select_metric", args.select_metric)
-    args.select_delta = cfg.get("select_delta", args.select_delta)
-    args.mc_T = cfg.get("mc_T", args.mc_T)
-    args.candidate_size = cfg.get("candidate_size", args.candidate_size)
-    args.top_m_mult = cfg.get("top_m_mult", args.top_m_mult)
 
     return args
 

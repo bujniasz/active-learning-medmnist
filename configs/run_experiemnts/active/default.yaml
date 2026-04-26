@@ -1,8 +1,8 @@
 # =============================================================================
-# Config for: src/run.py (Active Learning sweep)
+# Config for: src/run_experiments.py (Active Learning sweep)
 #
 # Run with:
-#   python3 src/run.py -c configs/experiment_launcher/active/default.yaml
+#   python3 src/run_experiments.py -c configs/run_experiments/active/default.yaml
 #
 # This config runs MULTIPLE Active Learning experiments (grid search).
 #

@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import MultipleLocator
 
-from metrics import load_config
+from shared import load_config
 
 STRATEGY_LABELS = {
     "random": "Random",
@@ -87,9 +87,6 @@ def apply_config(args):
         raise ValueError(f"Unknown al_mode: {al_mode}")
 
     args.epochs_per_cycles = cfg.get("epochs_per_cycles", args.epochs_per_cycles)
-
-    args.batch_size = cfg.get("batch_size", args.batch_size)
-    args.baseline_epochs = cfg.get("baseline_epochs", args.baseline_epochs)
 
     return args
 
@@ -301,12 +298,6 @@ def main() -> None:
     p.add_argument("--epochs-per-cycles", nargs="+", type=int, default=[1],
                    help="List of epochs per active learning cycle")
 
-    # Baseline params
-    p.add_argument("--batch-size", type=int, default=64,
-                   help="Batch size for baseline training")
-    p.add_argument("--baseline-epochs", type=int, default=3,
-                   help="Number of epochs for baseline training")
-
     args = p.parse_args()
 
     args = apply_config(args)
@@ -407,8 +398,6 @@ def main() -> None:
                     "-d", str(data_dir),
                     "-m", str(model_path),
                     "-r", str(results_csv),
-                    "--batch-size", str(args.batch_size),
-                    "--epochs", str(args.baseline_epochs),
                     "--seed", str(seed),
                 ]
 

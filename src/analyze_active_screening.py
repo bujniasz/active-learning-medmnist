@@ -13,7 +13,7 @@ import pandas as pd
 from scipy.stats import wilcoxon
 from typing import cast
 
-from metrics import load_config, fmt, fmt_p_value
+from shared import load_config, fmt, fmt_p_value
 
 # -----------------------------
 # CLI
@@ -130,11 +130,24 @@ def load_results(path: Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
+    baseline_rows = df[df["phase"] == "baseline"]
+    if len(baseline_rows) > 0:
+        print(
+            f"ℹ️ Found {len(baseline_rows)} baseline rows; "
+            "ignoring them in AL screening analysis."
+        )
+
     df = df[
         (df["phase"] == "active")
         & (df["split"] == "val")
         & (df["step_type"] == "cycle")
     ].copy()
+
+    if len(df) == 0:
+        raise ValueError(
+            "No Active Learning validation-cycle rows found. "
+            "Expected rows with phase='active', split='val', step_type='cycle'."
+        )
 
     numeric_cols = [
         "seed",
