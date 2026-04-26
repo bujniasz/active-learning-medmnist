@@ -8,8 +8,8 @@ This script supports two modes:
    - reads the shared results CSV
    - produces validation plots grouped by dataset and AL hyperparameters
 
-2) Baseline sweep:
-   - runs train_baseline.py for selected datasets and seeds
+2) Supervised sweep:
+   - runs train_supervised.py for selected datasets and seeds
    - writes results to the shared CSV
    - does not generate plots
 """
@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import MultipleLocator
 
-from shared import load_config
+from src.utils.shared import load_config
 
 STRATEGY_LABELS = {
     "random": "Random",
@@ -42,6 +42,20 @@ STRATEGY_LABELS = {
     "egl_fc": "EGL",
 }
 
+def script_path_to_module(script_path: str | Path) -> str:
+    """
+    Convert script path like:
+        src/training/train_active.py
+    to module path:
+        src.training.train_active
+    """
+    path = Path(script_path)
+
+    if path.suffix == ".py":
+        path = path.with_suffix("")
+
+    return ".".join(path.parts)
+
 def apply_config(args):
     if args.config is None:
         return args
@@ -53,7 +67,7 @@ def apply_config(args):
     args.data_dirs = cfg.get("data_dirs", args.data_dirs)
     args.results_csv = cfg.get("results_csv", args.results_csv)
     args.train_script = cfg.get("train_script", args.train_script)
-    args.baseline_train_script = cfg.get("baseline_train_script", args.baseline_train_script)
+    args.supervised_train_script = cfg.get("supervised_train_script", args.supervised_train_script)
     args.out_dir = cfg.get("out_dir", args.out_dir)
     args.python = cfg.get("python", args.python)
     args.no_run = cfg.get("no_run", args.no_run)
@@ -148,18 +162,18 @@ def build_model_path(
     return f"models/{dataset}-{results_name}-{strategy}-{config_tag}-{seed}.pth"
 
 
-def build_baseline_model_path(
+def build_supervised_model_path(
     data_dir: str,
     results_csv: str,
     seed: int,
 ) -> str:
     """
-    Build deterministic baseline model path:
-    models/{dataset}-{results_name}-baseline-{seed}.pth
+    Build deterministic supervised model path:
+    models/{dataset}-{results_name}-supervised-{seed}.pth
     """
     dataset = Path(data_dir).resolve().name
     results_name = Path(results_csv).stem
-    return f"models/{dataset}-{results_name}-baseline-{seed}.pth"
+    return f"models/{dataset}-{results_name}-supervised-{seed}.pth"
 
 
 def pct_str(x: float) -> str:
@@ -258,13 +272,13 @@ def main() -> None:
     # Data / execution
     p.add_argument("-c", "--config", type=str, default=None,
                help="Path to YAML config file")
-    p.add_argument("--mode", choices=["active", "baseline"], default="active",
-                   help="Run mode: active learning sweep or baseline sweep")
+    p.add_argument("--mode", choices=["active", "supervised"], default="active",
+                   help="Run mode: active learning sweep or supervised sweep")
     p.add_argument("--data-dirs", nargs="+", default=None,
                    help="Paths to dataset folders (required unless --no-run)")
     p.add_argument("--results-csv", default=None, help="Path to shared CSV")
-    p.add_argument("--train-script", default="src/train_active.py", help="Path to train_active.py")
-    p.add_argument("--baseline-train-script", default="src/train_baseline.py", help="Path to train_baseline.py")
+    p.add_argument("--train-script", default="src/training/train_active.py", help="Path to train_active.py")
+    p.add_argument("--supervised-train-script", default="src/training/train_supervised.py", help="Path to train_supervised.py")
     p.add_argument("--out-dir", default="results/plots", help="Where to write PNG plots")
     p.add_argument("--python", default=sys.executable, help="Python executable to use")
     p.add_argument("--no-run", action="store_true", help="Skip running training; just plot from CSV")
@@ -307,7 +321,7 @@ def main() -> None:
 
     results_csv = Path(args.results_csv)
     train_script = Path(args.train_script)
-    baseline_train_script = Path(args.baseline_train_script)
+    supervised_train_script = Path(args.supervised_train_script)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -379,14 +393,14 @@ def main() -> None:
     if not args.no_run:
         seeds = list(args.seeds)
 
-        if args.mode == "baseline":
+        if args.mode == "supervised":
             grid = itertools.product(
                 args.data_dirs,
                 seeds,
             )
 
             for data_dir, seed in grid:
-                model_path = build_baseline_model_path(
+                model_path = build_supervised_model_path(
                     data_dir=data_dir,
                     results_csv=args.results_csv,
                     seed=seed,
@@ -394,7 +408,8 @@ def main() -> None:
 
                 cmd = [
                     args.python,
-                    str(baseline_train_script),
+                    "-m",
+                    script_path_to_module(supervised_train_script),
                     "-d", str(data_dir),
                     "-m", str(model_path),
                     "-r", str(results_csv),
@@ -435,9 +450,10 @@ def main() -> None:
 
                     cmd = [
                         args.python,
-                        str(train_script),
+                        "-m",
+                        script_path_to_module(train_script),
                         "-d", str(data_dir),
-                        "-m", str(model_path),
+                        "-mp", str(model_path),
                         "-r", str(results_csv),
                         "--strategy", str(strat),
                         "--seed", str(seed),
@@ -477,9 +493,10 @@ def main() -> None:
 
                     cmd = [
                         args.python,
-                        str(train_script),
+                        "-m",
+                        script_path_to_module(train_script),
                         "-d", str(data_dir),
-                        "-m", str(model_path),
+                        "-mp", str(model_path),
                         "-r", str(results_csv),
                         "--strategy", str(strat),
                         "--seed", str(seed),
@@ -490,8 +507,8 @@ def main() -> None:
                     ]
                     run_cmd(cmd)
 
-    if args.mode == "baseline":
-        print("\n✅ Baseline sweep finished.")
+    if args.mode == "supervised":
+        print("\n✅ supervised sweep finished.")
         return
 
     # -----------------------------

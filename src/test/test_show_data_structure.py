@@ -1,6 +1,6 @@
 import numpy as np
 from collections import Counter
-from src.labels_mapping import map_labels, get_valid_indices
+from utils.labels_mapping import map_labels, get_valid_indices
 import os
 
 def analyze_split(split_name: str, data_dir: str):

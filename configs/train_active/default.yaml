@@ -17,14 +17,14 @@ data_dir: data/bloodmnist
 
 # === Output ===
 # Path where the best model checkpoint will be saved.
-model_path: models/bloodmnist-config-AL.pth
+model_path: models/rename-test-AL.pth
 
 # Path to CSV file where validation/test metrics will be appended.
-results_path: results/run_BS-test.csv
+results_path: results/rename-test.csv
 
 # === Reproducibility ===
 # Random seed used for NumPy, Python random and PyTorch.
-seed: 24
+seed: 240
 
 # === Strategy ===
 # Active Learning query strategy.
@@ -39,7 +39,7 @@ seed: 24
 #   mc_entropy_diverse
 #   mc_bald_diverse
 #   egl_fc
-strategy: mc_entropy_diverse
+strategy: margin
 
 # === Active Learning mode ===
 # Choose how init size, budget and batch size are specified.
@@ -55,7 +55,7 @@ al_mode: percent
 # batch_pct_of_budget: one query batch as % of resolved budget.
 init_size_pct: 1
 budget_pct: 30
-batch_pct_of_budget: 10
+batch_pct_of_budget: 20
 
 # === Absolute mode ===
 # Used only when al_mode: absolute.
@@ -69,4 +69,4 @@ batch: null
 
 # === Training ===
 # Number of training epochs after each AL query cycle.
-epochs_per_cycle: 5
+epochs_per_cycle: 1

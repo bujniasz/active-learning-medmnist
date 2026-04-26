@@ -22,8 +22,8 @@ from libact.labelers import IdealLabeler
 from libact.base.interfaces import ProbabilisticModel
 
 # Custom
-from load_data import prepare_split_active
-from shared import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
+from src.utils.load_data import prepare_split_active
+from src.utils.shared import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
 
 # === DEVICE ===
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -530,7 +530,7 @@ def parse_args():
     p.add_argument("-c", "--config", type=str, default=None, help="Path to YAML config file")
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
-    p.add_argument("-m", "--model-path", type=str, default=None, help="Path to the .pth model file (new or existing one)")
+    p.add_argument("-mp", "--model-path", type=str, default=None, help="Path to the .pth model file (new or existing one)")
     p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv", help="Path to the .csv file with evaluation results (if none provided it's the same as model-path)")
     p.add_argument("--init-size", type=int, default=None)
     p.add_argument("--budget", type=int, default=None)

@@ -14,11 +14,11 @@ import torch.optim as optim
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, average_precision_score
 
 # Custom
-from load_data import prepare_split_baseline
-from shared import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
+from src.utils.load_data import prepare_split_supervised
+from src.utils.shared import load_config, get_predictions, class_report_conf_matrix, fmt, append_row_to_csv, ResNet18EmbedDropout
 
 """
-train_baseline.py
+train_supervised.py
 
 Trains or evaluates a medical image classifier (ResNet18) on a selected MedMNIST subset.
 In training mode, it saves the best model based on validation accuracy.
@@ -30,9 +30,9 @@ Uses:
 
 Example usage:
     # Train a model on the dermamnist dataset:
-    python train_baseline.py -d data/dermamnist -m models/dermamnist_model.pth
+    python train_supervised.py -d data/dermamnist -m models/dermamnist_model.pth
     # Evaluate a previously saved model:
-    python train_baseline.py --eval-only -m models/dermamnist_model.pth
+    python train_supervised.py --eval-only -m models/dermamnist_model.pth
 """
 
 # === ARGUMENTS ===
@@ -41,7 +41,7 @@ def parse_args():
     p.add_argument("-c", "--config", type=str, default=None, help="Path to YAML config file")
     p.add_argument("--eval-only", action="store_true", help="Skip training of the model - just evaluate the existing one")
     p.add_argument("-d", "--data-dir", type=str, help="Path to data folder")
-    p.add_argument("-m", "--model-path", type=str, default=None, help="Path to the .pth model file (new or existing one)")
+    p.add_argument("-mp", "--model-path", type=str, default=None, help="Path to the .pth model file (new or existing one)")
     p.add_argument("-r", "--results-path", type=str, default="results/test-exps-pt3.csv", help="Global CSV log path")
     p.add_argument("--select-metric", type=str, default="mean", choices=["mean", "acc", "f1", "auc", "ap"],
                         help="Metric used to select the best checkpoint (mean = average of acc,f1,auc,ap)")
@@ -171,8 +171,8 @@ def run_supervised_loop(model, train_loader, val_loader, *,
         is_best = 1 if (sel > best_sel + delta) else 0
         append_row_to_csv({
             "dataset": os.path.basename(os.path.normpath(data_dir)),
-            "phase": "baseline",
-            "strategy": "supervised",
+            "phase": "supervised",
+            "strategy": "full_train_set",
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(model_path)),
 
@@ -264,7 +264,7 @@ if __name__ == "__main__":
 
     # ======= Evaluation mode (without training) =======
     if args.eval_only:
-        print("🔍 Mode: evaluation only (BASELINE)")
+        print("🔍 Mode: evaluation only (SUPERVISED)")
 
         checkpoint = torch.load(args.model_path, map_location=DEVICE)
         num_classes = checkpoint['num_classes']
@@ -273,7 +273,7 @@ if __name__ == "__main__":
         DATA_DIR = checkpoint['data_dir']
 
         # This call now also handles binary label mapping and filtering
-        _, val_loader, test_loader = prepare_split_baseline(DATA_DIR, batch_size=args.batch_size)
+        _, val_loader, test_loader = prepare_split_supervised(DATA_DIR, batch_size=args.batch_size)
 
         model = get_model(num_classes, in_channels)
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -281,11 +281,11 @@ if __name__ == "__main__":
 
     # ======= TRAINING + VALIDATION LOOP =======
     else:
-        print("🚀 Mode: training + evaluation (BASELINE)")
+        print("🚀 Mode: training + evaluation (SUPERVISED)")
         DATA_DIR = args.data_dir
 
         # This call now also handles binary label mapping and filtering
-        train_loader, val_loader, test_loader = prepare_split_baseline(DATA_DIR, batch_size=args.batch_size, seed=args.seed)
+        train_loader, val_loader, test_loader = prepare_split_supervised(DATA_DIR, batch_size=args.batch_size, seed=args.seed)
 
         sample_x, _ = next(iter(train_loader))
         in_channels = sample_x.shape[1]
@@ -352,8 +352,8 @@ if __name__ == "__main__":
     if not args.eval_only:
         append_row_to_csv({
             "dataset": os.path.basename(os.path.normpath(DATA_DIR)),
-            "phase": "baseline",
-            "strategy": "supervised",
+            "phase": "supervised",
+            "strategy": "full_train_set",
             "seed": int(args.seed),
             "model": os.path.basename(os.path.normpath(args.model_path)),
 

@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 # Custom
-from labels_mapping import map_labels, get_valid_indices
+from src.utils.labels_mapping import map_labels, get_valid_indices
 
 binary_mapping_required = {"bloodmnist", "octmnist", "pathmnist"}
 class MedMNISTDataset(Dataset):
@@ -61,7 +61,7 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
-def prepare_split_baseline(data_dir, batch_size=64, num_workers=2, seed: int | None = None):
+def prepare_split_supervised(data_dir, batch_size=64, num_workers=2, seed: int | None = None):
     """
     Returns dataloaders for train/val/test sets.
     It applies binary label mapping and filtering (if needed).

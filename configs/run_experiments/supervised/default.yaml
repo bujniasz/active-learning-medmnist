@@ -1,10 +1,10 @@
 # =============================================================================
-# Config for: src/run_experiments.py (Baseline sweep)
+# Config for: src/run_experiments.py (supervised sweep)
 #
 # Run with:
-#   python3 src/run_experiments.py -c configs/run_experiments/baseline/default.yaml
+#   python3 src/run_experiments.py -c configs/run_experiments/supervised/default.yaml
 #
-# This config runs MULTIPLE baseline (fully supervised) trainings.
+# This config runs MULTIPLE supervised (fully supervised) trainings.
 #
 # Each combination of:
 #   - dataset
@@ -16,21 +16,21 @@
 #   data_dirs: [data/bloodmnist, data/pathmnist]
 #   seeds: [1, 24]
 #
-# → will run 2 x 2 = 4 baseline experiments
+# → will run 2 x 2 = 4 supervised experiments
 #
 # Results from all runs are appended to one CSV file.
 # =============================================================================
 
 # === Mode ===
-# Must be "baseline" for baseline experiments.
-mode: baseline
+# Must be "supervised" for supervised experiments.
+mode: supervised
 
 # === Execution ===
 # Python executable to use.
 python: python3
 
-# Path to train_baseline.py script.
-baseline_train_script: src/train_baseline.py
+# Path to train_supervised.py script.
+supervised_train_script: src/training/train_supervised.py
 
 # If true: skip training and only reuse existing results.
 no_run: false
@@ -48,14 +48,14 @@ data_dirs:
 
 # === Output ===
 # CSV file where all experiment results will be stored.
-results_csv: results/baseline_patience-test.csv
+results_csv: results/rename-test.csv
 
 # Directory for outputs (reserved for future use; plotting not used yet).
-out_dir: results/baseline_patience-test
+out_dir: results/run-rename-test
 
 # === Reproducibility ===
 # List of random seeds.
 # Each seed defines one independent training run.
 seeds:
-  - 15
-  - 547
+  - 434
+  - 2333

@@ -29,7 +29,7 @@ mode: active
 python: python3
 
 # Path to train_active.py script.
-train_script: src/train_active.py
+train_script: src/training/train_active.py
 
 # If true: skip training and only generate plots from existing CSV.
 no_run: false
@@ -47,17 +47,17 @@ data_dirs:
 
 # === Output ===
 # CSV file where all experiment results will be stored.
-results_csv: results/run_BS-test.csv
+results_csv: results/rename-test.csv
 
 # Directory where plots will be saved.
-out_dir: results/screening_plots
+out_dir: results/rename-test-run
 
 # === Reproducibility ===
 # List of random seeds.
 # Each seed defines one independent run.
 seeds:
-  - 1
-  - 24
+  - 434
+  - 2333
 
 # === Strategies ===
 # List of Active Learning strategies.
@@ -73,7 +73,7 @@ seeds:
 #   mc_bald_diverse
 #   egl_fc
 strategies:
-  - mc_entropy_diverse
+  - random
 
 # === Active Learning mode ===
 # How to specify init size / budget / batch size.
@@ -92,7 +92,7 @@ init_size_pcts:
   - 1
 
 batch_pcts_of_budget:
-  - 10
+  - 20
 
 budget_pcts:
   - 30

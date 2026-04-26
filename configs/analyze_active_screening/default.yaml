@@ -14,11 +14,11 @@
 # === Input ===
 # Path to CSV file with experiment results.
 # This file should contain results from multiple AL runs.
-results_csv: results/screening_official.csv
+results_csv: results/rename-test.csv
 
 # === Output ===
 # Directory where analysis results (tables, summaries) will be saved.
-out_dir: results/test-screening-config
+out_dir: results/screening-rename-test
 
 # === Metric ===
 # Metric used to compare and rank experiments.

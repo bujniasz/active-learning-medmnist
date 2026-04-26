@@ -1,5 +1,5 @@
 import numpy as np
-from src.labels_mapping import map_labels
+from utils.labels_mapping import map_labels
 
 original = np.array([[0], [1], [2], [3], [4], [5], [6], [7]])
 binary = map_labels("bloodmnist", original)

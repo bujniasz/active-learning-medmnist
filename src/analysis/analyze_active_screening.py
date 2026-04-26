@@ -13,7 +13,7 @@ import pandas as pd
 from scipy.stats import wilcoxon
 from typing import cast
 
-from shared import load_config, fmt, fmt_p_value
+from src.utils.shared import load_config, fmt, fmt_p_value
 
 # -----------------------------
 # CLI
@@ -130,10 +130,10 @@ def load_results(path: Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    baseline_rows = df[df["phase"] == "baseline"]
-    if len(baseline_rows) > 0:
+    supervised_rows = df[df["phase"] == "supervised"]
+    if len(supervised_rows) > 0:
         print(
-            f"ℹ️ Found {len(baseline_rows)} baseline rows; "
+            f"ℹ️ Found {len(supervised_rows)} supervised rows; "
             "ignoring them in AL screening analysis."
         )
 
