@@ -643,7 +643,6 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, seed: int = 42, s
 
     return active_ds, oracle, qs, init_idx
 
-# === TRAINING + VALIDATION LOOP === 
 # === TRAINING + VALIDATION LOOP ===
 def run_active_loop(
     active_ds,
@@ -652,8 +651,6 @@ def run_active_loop(
     wrapper,
     X_val,
     y_val,
-    budget: int,
-    batch: int,
     batch_schedule: list[int],
     model_path: str,
     select_metric: str = "acc",
@@ -935,8 +932,12 @@ def run_active_loop(
 
             print(f"✅ NEW BEST (by {args.select_metric}) → {best_sel:.4f}")
 
-    # CHANGED: ask log zapisujemy z model_path przekazanym do funkcji, nie z args.model_path
-    ask_log_path = Path(model_path).with_suffix(".asklog.json")
+    # Save ask log to logs/ instead of models/
+    ask_log_path = Path("logs") / Path(model_path).with_suffix(".asklog.json").name
+
+    # ensure logs directory exists
+    ask_log_path.parent.mkdir(parents=True, exist_ok=True)
+
     with open(ask_log_path, "w") as f:
         json.dump(ask_log, f, indent=2)
 
@@ -1125,8 +1126,6 @@ if __name__ == "__main__":
             wrapper,
             X_val,
             y_val,
-            budget=resolved_budget,
-            batch=resolved_batch,
             batch_schedule=resolved_batch_schedule,
             model_path=args.model_path,
             select_metric=args.select_metric,
