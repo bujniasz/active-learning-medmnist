@@ -197,7 +197,6 @@ def class_report_conf_matrix(y_true, y_pred, *, verbose: bool = True):
     # For multiclass: keep CSV empty (no sensible TP/FP/TN/FN single set)
     return "", "", "", ""
 
-
 def save_metrics_to_csv(metrics: dict, path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
 

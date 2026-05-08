@@ -118,15 +118,12 @@ def make_color_map(strategies: list[str]) -> dict[str, str]:
         cmap[s] = cycle[i % len(cycle)]
     return cmap
 
-
 def run_cmd(cmd: list[str]) -> None:
     print("\n▶ Running:", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
-
 def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
 
 def compute_best_x_by_strategy(df_val: pd.DataFrame) -> dict[str, int]:
     """Return {strategy: labeled_count_at_best_mean_val_mean}."""
@@ -145,7 +142,6 @@ def compute_best_x_by_strategy(df_val: pd.DataFrame) -> dict[str, int]:
         best_x[strat] = best_lc
     return best_x
 
-
 def build_model_path(
     data_dir: str,
     results_csv: str,
@@ -161,7 +157,6 @@ def build_model_path(
     results_name = Path(results_csv).stem
     return f"models/{dataset}-{results_name}-{strategy}-{config_tag}-{seed}.pth"
 
-
 def build_supervised_model_path(
     data_dir: str,
     results_csv: str,
@@ -175,13 +170,11 @@ def build_supervised_model_path(
     results_name = Path(results_csv).stem
     return f"models/{dataset}-{results_name}-supervised-{seed}.pth"
 
-
 def pct_str(x: float) -> str:
     """Pretty % string for filenames/tags."""
     if float(x).is_integer():
         return str(int(x))
     return str(x).replace(".", "p")
-
 
 def plot_metric(
     df_val: pd.DataFrame,
@@ -264,7 +257,6 @@ def plot_metric(
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
-
 
 def main() -> None:
     p = argparse.ArgumentParser()
@@ -660,7 +652,6 @@ def main() -> None:
             plot_metric(group_df, metric, best_x, title, out_path, color_map)
 
     print("\n✅ Plots written to:", out_dir.resolve())
-
 
 if __name__ == "__main__":
     main()

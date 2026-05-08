@@ -4,14 +4,14 @@ from __future__ import annotations
 import argparse
 from itertools import combinations
 from pathlib import Path
+from typing import cast
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MultipleLocator, MaxNLocator
 from matplotlib.patches import Rectangle
+from matplotlib.ticker import MaxNLocator, MultipleLocator
 import numpy as np
 import pandas as pd
 from scipy.stats import wilcoxon
-from typing import cast
 
 from src.utils.shared import load_config, fmt, fmt_p_value
 
@@ -23,9 +23,8 @@ def parse_args():
     p.add_argument("-c", "--config", type=str, default=None, help="Path to YAML config file")
     p.add_argument("--results-csv", default=None, help="Path to results CSV")
     p.add_argument("--out-dir", default=None, help="Directory for analysis outputs")
-    p.add_argument("--metric", default="val_mean", help="Metric used for AULC/final comparison")
+    p.add_argument("--metric", default="val_mean", help="Metric used for AULC / validation comparison")
     return p.parse_args()
-
 
 # -----------------------------
 # Helpers
@@ -49,11 +48,9 @@ def format_numeric_columns(df: pd.DataFrame, cols: list[str], ndigits: int = 4) 
             df[col] = df[col].apply(lambda x: fmt(x, ndigits=ndigits))
     return df
 
-
 def sanitize_filename_part(x) -> str:
     s = str(x)
     return "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in s)
-
 
 def sorted_unique_numeric_values(df: pd.DataFrame, col: str) -> list[float]:
     s = pd.to_numeric(df[col], errors="coerce").dropna().astype(float)
@@ -61,12 +58,10 @@ def sorted_unique_numeric_values(df: pd.DataFrame, col: str) -> list[float]:
     vals.sort()
     return vals
 
-
 def fmt_level(v: float) -> str:
     if float(v).is_integer():
         return str(int(v))
     return str(v).replace(".", "p")
-
 
 def pretty_param_label(col: str) -> str:
     mapping = {
@@ -79,11 +74,38 @@ def pretty_param_label(col: str) -> str:
         "epc": "epochs per cycle",
         "labeled_count": "labeled count",
         "val_mean": "val_mean",
-        "final_metric": "final metric",
+        "last_iteration_model_metric": "last-iteration model",
+        "best_val_metric": "best validation metric",
+        "final_test_model_mean": "final test model mean",
         "aulc_norm": "AULC (normalized)",
     }
     return mapping.get(col, col.replace("_", " "))
 
+def add_composite_mean(
+    df: pd.DataFrame,
+    *,
+    out_col: str,
+    metric_cols: list[str] | None = None,
+) -> pd.DataFrame:
+    """
+    Adds a composite mean score computed from available metric columns.
+    Useful for test rows where val_mean is empty.
+    """
+    if metric_cols is None:
+        metric_cols = ["acc", "f1_macro", "auc", "ap"]
+
+    df = df.copy()
+    existing = [c for c in metric_cols if c in df.columns]
+
+    if not existing:
+        df[out_col] = np.nan
+        return df
+
+    for col in existing:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df[out_col] = df[existing].mean(axis=1, skipna=True)
+    return df
 
 def maybe_set_zoomed_yaxis(ax, y: pd.Series | np.ndarray) -> None:
     vals = pd.to_numeric(pd.Series(y), errors="coerce").dropna()
@@ -104,7 +126,6 @@ def maybe_set_zoomed_yaxis(ax, y: pd.Series | np.ndarray) -> None:
     ax.grid(axis="y", which="major", alpha=0.35)
     ax.grid(axis="y", which="minor", alpha=0.15)
 
-
 # -----------------------------
 # Load + mode detection
 # -----------------------------
@@ -120,7 +141,6 @@ def load_results(path: Path) -> pd.DataFrame:
         "budget",
         "epc",
         "labeled_count",
-        "val_mean",
         "phase",
         "split",
         "step_type",
@@ -137,17 +157,10 @@ def load_results(path: Path) -> pd.DataFrame:
             "ignoring them in AL screening analysis."
         )
 
-    df = df[
-        (df["phase"] == "active")
-        & (df["split"] == "val")
-        & (df["step_type"] == "cycle")
-    ].copy()
+    df = df[df["phase"] == "active"].copy()
 
     if len(df) == 0:
-        raise ValueError(
-            "No Active Learning validation-cycle rows found. "
-            "Expected rows with phase='active', split='val', step_type='cycle'."
-        )
+        raise ValueError("No Active Learning rows found. Expected rows with phase='active'.")
 
     numeric_cols = [
         "seed",
@@ -166,6 +179,11 @@ def load_results(path: Path) -> pd.DataFrame:
         "auc",
         "ap",
         "train_loss",
+        "is_best",
+        "tp",
+        "fp",
+        "tn",
+        "fn",
     ]
 
     for col in numeric_cols:
@@ -173,7 +191,6 @@ def load_results(path: Path) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     return df
-
 
 def detect_param_columns(df: pd.DataFrame) -> dict[str, str]:
     """
@@ -207,7 +224,6 @@ def detect_param_columns(df: pd.DataFrame) -> dict[str, str]:
 
     return abs_candidates
 
-
 # -----------------------------
 # AULC
 # -----------------------------
@@ -232,7 +248,6 @@ def compute_aulc(g: pd.DataFrame, x: str = "labeled_count", y: str = "val_mean")
 
     return area, norm
 
-
 # -----------------------------
 # Build run summary
 # -----------------------------
@@ -254,54 +269,106 @@ def build_run_summary(df: pd.DataFrame, metric: str) -> pd.DataFrame:
     if "batch_pct_of_budget" in df.columns:
         group_cols.append("batch_pct_of_budget")
 
+    val_df = df[
+        (df["split"] == "val")
+        & (df["step_type"] == "cycle")
+    ].copy()
+
+    if len(val_df) == 0:
+        raise ValueError(
+            "No Active Learning validation-cycle rows found. "
+            "Expected rows with phase='active', split='val', step_type='cycle'."
+        )
+
+    if metric not in val_df.columns:
+        raise ValueError(f"Metric column not found in validation rows: {metric}")
+
+    test_df = df[
+        (df["split"] == "test")
+        & (df["step_type"] == "final")
+    ].copy()
+    test_df = add_composite_mean(test_df, out_col="final_test_model_mean")
+
     rows = []
 
-    for key, g in df.groupby(group_cols):
+    for key, g in val_df.groupby(group_cols):
         g = g.sort_values("labeled_count").copy()
 
-        valid_metric = g[metric].dropna()
+        valid_metric = pd.to_numeric(g[metric], errors="coerce").dropna()
         if len(valid_metric) == 0:
             continue
 
         aulc, aulc_norm = compute_aulc(g, "labeled_count", metric)
 
-        final_row = g.iloc[-1]
+        last_row = g.iloc[-1]
         best_idx = g[metric].idxmax()
         best_row = g.loc[best_idx]
 
-        rows.append(
-            {
-                **dict(zip(group_cols, key)),
-                "aulc": aulc,
-                "aulc_norm": aulc_norm,
-                "final_metric": final_row[metric],
-                "best_metric": best_row[metric],
-                "final_labeled_count": final_row["labeled_count"],
-                "best_labeled_count": best_row["labeled_count"],
-                "n_cycles": len(g),
-            }
-        )
+        row = {
+            **dict(zip(group_cols, key)),
+            "aulc": aulc,
+            "aulc_norm": aulc_norm,
+            "last_iteration_model_metric": last_row[metric],
+            "last_iteration_labeled_count": last_row["labeled_count"],
+            "best_val_metric": best_row[metric],
+            "best_labeled_count": best_row["labeled_count"],
+            "n_cycles": len(g),
+        }
+
+        test_match = test_df.copy()
+        for col, value in zip(group_cols, key):
+            test_match = test_match[test_match[col] == value]
+
+        if len(test_match) == 0:
+            row["final_test_model_mean"] = np.nan
+            row["final_test_acc"] = np.nan
+            row["final_test_f1_macro"] = np.nan
+            row["final_test_auc"] = np.nan
+            row["final_test_ap"] = np.nan
+            row["final_test_labeled_count"] = np.nan
+        else:
+            if len(test_match) > 1:
+                print(
+                    "⚠️ Multiple final test rows found for run; using the first one:",
+                    dict(zip(group_cols, key)),
+                )
+
+            t = test_match.iloc[0]
+            row["final_test_model_mean"] = t.get("final_test_model_mean", np.nan)
+            row["final_test_acc"] = t.get("acc", np.nan)
+            row["final_test_f1_macro"] = t.get("f1_macro", np.nan)
+            row["final_test_auc"] = t.get("auc", np.nan)
+            row["final_test_ap"] = t.get("ap", np.nan)
+            row["final_test_labeled_count"] = t.get("labeled_count", np.nan)
+
+        rows.append(row)
 
     return pd.DataFrame(rows)
-
 
 # -----------------------------
 # Main effects
 # -----------------------------
 def main_effects(summary: pd.DataFrame, param_col: str) -> pd.DataFrame:
+    agg_kwargs = {
+        "mean_aulc_norm": ("aulc_norm", "mean"),
+        "std_aulc_norm": ("aulc_norm", "std"),
+        "mean_last_iteration_model": ("last_iteration_model_metric", "mean"),
+        "std_last_iteration_model": ("last_iteration_model_metric", "std"),
+        "mean_best_val": ("best_val_metric", "mean"),
+        "std_best_val": ("best_val_metric", "std"),
+        "count": ("aulc_norm", "count"),
+    }
+
+    if "final_test_model_mean" in summary.columns:
+        agg_kwargs["mean_final_test_model"] = ("final_test_model_mean", "mean")
+        agg_kwargs["std_final_test_model"] = ("final_test_model_mean", "std")
+
     return (
         summary.groupby(param_col)
-        .agg(
-            mean_aulc_norm=("aulc_norm", "mean"),
-            std_aulc_norm=("aulc_norm", "std"),
-            mean_final=("final_metric", "mean"),
-            std_final=("final_metric", "std"),
-            count=("aulc_norm", "count"),
-        )
+        .agg(**agg_kwargs)
         .reset_index()
         .sort_values("mean_aulc_norm", ascending=False)
     )
-
 
 def plot_absolute_colored_effect(
     summary: pd.DataFrame,
@@ -382,8 +449,13 @@ def plot_absolute_colored_effect(
         framealpha=0.95,
     )
 
-    ax.set_title(f"Wpływ parametru {pretty_name} (wartości absolutne)")
-    ax.set_xlabel(f"{pretty_name} – wartość absolutna")
+    if abs_col == "batch":
+        ax.set_title("Wpływ nominalnego batcha (wartości absolutne)")
+        ax.set_xlabel("Nominalny batch – zwykle rozmiar pierwszych cykli")
+    else:
+        ax.set_title(f"Wpływ parametru {pretty_name} (wartości absolutne)")
+        ax.set_xlabel(f"{pretty_name} – wartość absolutna")
+
     ax.set_ylabel("Średni AULC (znormalizowany)")
 
     ax.grid(axis="y", alpha=0.3)
@@ -392,7 +464,6 @@ def plot_absolute_colored_effect(
     fig.tight_layout()
     fig.savefig(aux_dir / f"{pretty_name}_absolute_colored.png", dpi=180)
     plt.close(fig)
-
 
 # -----------------------------
 # Pairwise comparisons
@@ -428,19 +499,29 @@ def pairwise_compare_all(
     base_cols = [c for c in base_cols if not (c in seen or seen.add(c))]
     base_cols = [c for c in base_cols if c != param_col]
 
+    pairwise_metrics = [
+        "aulc_norm",
+        "last_iteration_model_metric",
+        "final_test_model_mean",
+    ]
+
     all_pw = []
     all_summary = []
 
     for v1, v2 in combinations(values, 2):
         sub = summary[summary[param_col].isin([v1, v2])].copy()
 
+        metrics_available = [m for m in pairwise_metrics if m in sub.columns]
+        if not metrics_available:
+            continue
+
         pivot = sub.pivot_table(
             index=base_cols,
             columns=param_col,
-            values=["aulc_norm", "final_metric"],
+            values=metrics_available,
         )
 
-        pivot = pivot.dropna()
+        pivot = pivot.dropna(how="all")
         if len(pivot) == 0:
             continue
 
@@ -449,8 +530,33 @@ def pairwise_compare_all(
         v1_key = fmt_level(v1)
         v2_key = fmt_level(v2)
 
-        pivot["delta_aulc_norm"] = pivot[f"aulc_norm_{v1_key}"] - pivot[f"aulc_norm_{v2_key}"]
-        pivot["delta_final"] = pivot[f"final_metric_{v1_key}"] - pivot[f"final_metric_{v2_key}"]
+        if f"aulc_norm_{v1_key}" in pivot.columns and f"aulc_norm_{v2_key}" in pivot.columns:
+            pivot["delta_aulc_norm"] = pivot[f"aulc_norm_{v1_key}"] - pivot[f"aulc_norm_{v2_key}"]
+
+        if f"last_iteration_model_metric_{v1_key}" in pivot.columns and f"last_iteration_model_metric_{v2_key}" in pivot.columns:
+            pivot["delta_last_iteration_model"] = (
+                pivot[f"last_iteration_model_metric_{v1_key}"]
+                - pivot[f"last_iteration_model_metric_{v2_key}"]
+            )
+
+        if f"final_test_model_mean_{v1_key}" in pivot.columns and f"final_test_model_mean_{v2_key}" in pivot.columns:
+            pivot["delta_final_test_model"] = (
+                pivot[f"final_test_model_mean_{v1_key}"]
+                - pivot[f"final_test_model_mean_{v2_key}"]
+            )
+
+        delta_cols = [
+            c
+            for c in ["delta_aulc_norm", "delta_last_iteration_model", "delta_final_test_model"]
+            if c in pivot.columns
+        ]
+
+        if not delta_cols:
+            continue
+
+        pivot = pivot.dropna(subset=delta_cols, how="all")
+        if len(pivot) == 0:
+            continue
 
         pw = pivot.reset_index()
         pw["param"] = param_col
@@ -459,45 +565,67 @@ def pairwise_compare_all(
         pw["v2"] = v2
 
         n = len(pw)
-        wins_v1_aulc = int((pw["delta_aulc_norm"] > 0).sum())
-        wins_v2_aulc = int((pw["delta_aulc_norm"] < 0).sum())
-        ties_aulc = int((pw["delta_aulc_norm"] == 0).sum())
+        summary_data = {
+            "param": param_col,
+            "comparison": f"{fmt_level(v1)}_vs_{fmt_level(v2)}",
+            "v1": v1,
+            "v2": v2,
+            "n_pairs": n,
+        }
 
-        wins_v1_final = int((pw["delta_final"] > 0).sum())
-        wins_v2_final = int((pw["delta_final"] < 0).sum())
-        ties_final = int((pw["delta_final"] == 0).sum())
+        if "delta_aulc_norm" in pw.columns:
+            vals = pd.to_numeric(pw["delta_aulc_norm"], errors="coerce").dropna()
+            n_metric = len(vals)
+            wins_v1 = int((vals > 0).sum())
+            wins_v2 = int((vals < 0).sum())
+            ties = int((vals == 0).sum())
+            summary_data.update({
+                "n_pairs_aulc": n_metric,
+                "median_delta_aulc_norm": vals.median() if n_metric else np.nan,
+                "mean_delta_aulc_norm": vals.mean() if n_metric else np.nan,
+                "win_rate_v1_aulc_pct": 100.0 * wins_v1 / n_metric if n_metric else np.nan,
+                "win_rate_v2_aulc_pct": 100.0 * wins_v2 / n_metric if n_metric else np.nan,
+                "ties_aulc": ties,
+            })
 
-        summary_row = pd.DataFrame(
-            [
-                {
-                    "param": param_col,
-                    "comparison": f"{fmt_level(v1)}_vs_{fmt_level(v2)}",
-                    "v1": v1,
-                    "v2": v2,
-                    "n_pairs": n,
-                    "median_delta_aulc_norm": pw["delta_aulc_norm"].median(),
-                    "mean_delta_aulc_norm": pw["delta_aulc_norm"].mean(),
-                    "win_rate_v1_aulc_pct": 100.0 * wins_v1_aulc / n if n else np.nan,
-                    "win_rate_v2_aulc_pct": 100.0 * wins_v2_aulc / n if n else np.nan,
-                    "ties_aulc": ties_aulc,
-                    "median_delta_final": pw["delta_final"].median(),
-                    "mean_delta_final": pw["delta_final"].mean(),
-                    "win_rate_v1_final_pct": 100.0 * wins_v1_final / n if n else np.nan,
-                    "win_rate_v2_final_pct": 100.0 * wins_v2_final / n if n else np.nan,
-                    "ties_final": ties_final,
-                }
-            ]
-        )
+        if "delta_last_iteration_model" in pw.columns:
+            vals = pd.to_numeric(pw["delta_last_iteration_model"], errors="coerce").dropna()
+            n_metric = len(vals)
+            wins_v1 = int((vals > 0).sum())
+            wins_v2 = int((vals < 0).sum())
+            ties = int((vals == 0).sum())
+            summary_data.update({
+                "n_pairs_last_iteration_model": n_metric,
+                "median_delta_last_iteration_model": vals.median() if n_metric else np.nan,
+                "mean_delta_last_iteration_model": vals.mean() if n_metric else np.nan,
+                "win_rate_v1_last_iteration_model_pct": 100.0 * wins_v1 / n_metric if n_metric else np.nan,
+                "win_rate_v2_last_iteration_model_pct": 100.0 * wins_v2 / n_metric if n_metric else np.nan,
+                "ties_last_iteration_model": ties,
+            })
+
+        if "delta_final_test_model" in pw.columns:
+            vals = pd.to_numeric(pw["delta_final_test_model"], errors="coerce").dropna()
+            n_metric = len(vals)
+            wins_v1 = int((vals > 0).sum())
+            wins_v2 = int((vals < 0).sum())
+            ties = int((vals == 0).sum())
+            summary_data.update({
+                "n_pairs_final_test_model": n_metric,
+                "median_delta_final_test_model": vals.median() if n_metric else np.nan,
+                "mean_delta_final_test_model": vals.mean() if n_metric else np.nan,
+                "win_rate_v1_final_test_model_pct": 100.0 * wins_v1 / n_metric if n_metric else np.nan,
+                "win_rate_v2_final_test_model_pct": 100.0 * wins_v2 / n_metric if n_metric else np.nan,
+                "ties_final_test_model": ties,
+            })
 
         all_pw.append(pw)
-        all_summary.append(summary_row)
+        all_summary.append(pd.DataFrame([summary_data]))
 
     if not all_pw:
         print(f"⚠️ No valid pairs found for {param_col}")
         return pd.DataFrame(), pd.DataFrame()
 
     return pd.concat(all_pw, ignore_index=True), pd.concat(all_summary, ignore_index=True)
-
 
 # -----------------------------
 # Wilcoxon
@@ -506,10 +634,6 @@ def wilcoxon_from_pairwise(pw: pd.DataFrame, param_name: str) -> pd.DataFrame:
     """
     Computes paired Wilcoxon signed-rank tests from pairwise deltas.
     Tests whether median(delta) differs from 0.
-
-    Output metrics:
-      - delta_aulc_norm
-      - delta_final
     """
     if len(pw) == 0:
         return pd.DataFrame()
@@ -518,7 +642,8 @@ def wilcoxon_from_pairwise(pw: pd.DataFrame, param_name: str) -> pd.DataFrame:
 
     metric_map = {
         "delta_aulc_norm": "aulc_norm",
-        "delta_final": "final_metric",
+        "delta_last_iteration_model": "last-iteration-model",
+        "delta_final_test_model": "final-test-model",
     }
 
     for comparison, g in pw.groupby("comparison"):
@@ -526,6 +651,9 @@ def wilcoxon_from_pairwise(pw: pd.DataFrame, param_name: str) -> pd.DataFrame:
         v2 = g["v2"].iloc[0]
 
         for delta_col, metric_name in metric_map.items():
+            if delta_col not in g.columns:
+                continue
+
             vals = pd.to_numeric(g[delta_col], errors="coerce").dropna().to_numpy()
 
             n_pairs = int(len(vals))
@@ -588,7 +716,6 @@ def wilcoxon_from_pairwise(pw: pd.DataFrame, param_name: str) -> pd.DataFrame:
 
     return pd.DataFrame(rows)
 
-
 # -----------------------------
 # Plots
 # -----------------------------
@@ -606,6 +733,10 @@ def plot_screening_curves(
     """
     curves_dir = out_dir / "plots" / "screening_curves" / param_col
     curves_dir.mkdir(parents=True, exist_ok=True)
+
+    df = df[(df["split"] == "val") & (df["step_type"] == "cycle")].copy()
+    if len(df) == 0:
+        return
 
     if use_pct_mode:
         candidate_group_cols = [
@@ -698,6 +829,8 @@ def plot_screening_curves(
                 label=f"{param_label_map.get(param_col, param_col)} = {val_txt}",
             )
 
+        if not isinstance(key, tuple):
+            key = (key,)
         key_dict = dict(zip(group_cols, key))
 
         fixed_parts = []
@@ -768,7 +901,6 @@ def plot_screening_curves(
         fig.savefig(curves_dir / fname, dpi=180)
         plt.close(fig)
 
-
 def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> None:
     if len(pw) == 0:
         return
@@ -780,12 +912,14 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
 
     metric_labels = {
         "delta_aulc_norm": "Różnica AULC (znormalizowanego)",
-        "delta_final": "Różnica wyniku końcowego",
+        "delta_last_iteration_model": "Różnica wyniku modelu z ostatniej iteracji",
+        "delta_final_test_model": "Różnica wyniku finalnego modelu testowego",
     }
 
     metric_titles = {
         "delta_aulc_norm": "Rozkład różnic AULC",
-        "delta_final": "Rozkład różnic wyniku końcowego",
+        "delta_last_iteration_model": "Rozkład różnic modelu z ostatniej iteracji",
+        "delta_final_test_model": "Rozkład różnic finalnego modelu testowego",
     }
 
     param_labels = {
@@ -809,8 +943,12 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
 
         for col, suffix in [
             ("delta_aulc_norm", "aulc"),
-            ("delta_final", "final"),
+            ("delta_last_iteration_model", "last-iteration-model"),
+            ("delta_final_test_model", "final-test-model"),
         ]:
+            if col not in pw_cmp.columns:
+                continue
+
             vals = pd.to_numeric(pw_cmp[col], errors="coerce").dropna().to_numpy()
             if len(vals) == 0:
                 continue
@@ -826,6 +964,10 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
 
             xmin = float(vals.min())
             xmax = float(vals.max())
+
+            if xmin == xmax:
+                xmin -= eps
+                xmax += eps
 
             total_bins = min(14, max(6, int(np.sqrt(len(vals)) * 1.5)))
             edges = np.linspace(xmin, xmax, total_bins + 1)
@@ -957,7 +1099,6 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
             )
             plt.close(fig_bar)
 
-
 def plot_main_effects(
     table: pd.DataFrame,
     out_dir: Path,
@@ -1035,13 +1176,11 @@ def plot_main_effects(
     fig.savefig(main_effects_dir / f"main_effects_{pretty_name}.png", dpi=180)
     plt.close(fig)
 
-
 # -----------------------------
 # MAIN
 # -----------------------------
 def main():
     args = parse_args()
-
     args = apply_config(args)
 
     if args.results_csv is None:
@@ -1054,10 +1193,16 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df = load_results(Path(args.results_csv))
-    print("Loaded rows:", len(df))
+    print("Loaded active rows:", len(df))
 
-    if len(df) == 0:
-        raise SystemExit("No rows found after filtering to phase=active, split=val, step_type=cycle.")
+    val_cycle_rows = df[(df["split"] == "val") & (df["step_type"] == "cycle")]
+    print("Validation-cycle rows:", len(val_cycle_rows))
+
+    test_final_rows = df[(df["split"] == "test") & (df["step_type"] == "final")]
+    print("Final-test rows:", len(test_final_rows))
+
+    if len(val_cycle_rows) == 0:
+        raise SystemExit("No rows found for validation curves: split=val, step_type=cycle.")
 
     param_cols = detect_param_columns(df)
     print("Using analysis columns:", param_cols)
@@ -1074,7 +1219,17 @@ def main():
 
     summary_to_save = format_numeric_columns(
         summary,
-        cols=["aulc", "aulc_norm", "final_metric", "best_metric"],
+        cols=[
+            "aulc",
+            "aulc_norm",
+            "last_iteration_model_metric",
+            "best_val_metric",
+            "final_test_model_mean",
+            "final_test_acc",
+            "final_test_f1_macro",
+            "final_test_auc",
+            "final_test_ap",
+        ],
     )
     summary_path = out_dir / "run_summary.csv"
     summary_to_save.to_csv(summary_path, index=False)
@@ -1096,7 +1251,16 @@ def main():
 
         table_to_save = format_numeric_columns(
             table,
-            cols=["mean_aulc_norm", "std_aulc_norm", "mean_final", "std_final"],
+            cols=[
+                "mean_aulc_norm",
+                "std_aulc_norm",
+                "mean_last_iteration_model",
+                "std_last_iteration_model",
+                "mean_best_val",
+                "std_best_val",
+                "mean_final_test_model",
+                "std_final_test_model",
+            ],
         )
         table_to_save.to_csv(path, index=False)
 
@@ -1118,8 +1282,15 @@ def main():
                 c
                 for c in pw.columns
                 if c.startswith("aulc_norm_")
-                or c.startswith("final_metric_")
-                or c in ["delta_aulc_norm", "delta_final", "v1", "v2"]
+                or c.startswith("last_iteration_model_metric_")
+                or c.startswith("final_test_model_mean_")
+                or c in [
+                    "delta_aulc_norm",
+                    "delta_last_iteration_model",
+                    "delta_final_test_model",
+                    "v1",
+                    "v2",
+                ]
             ],
         )
         pw_to_save.to_csv(pw_path, index=False)
@@ -1134,20 +1305,29 @@ def main():
                 "mean_delta_aulc_norm",
                 "win_rate_v1_aulc_pct",
                 "win_rate_v2_aulc_pct",
-                "median_delta_final",
-                "mean_delta_final",
-                "win_rate_v1_final_pct",
-                "win_rate_v2_final_pct",
+                "median_delta_last_iteration_model",
+                "mean_delta_last_iteration_model",
+                "win_rate_v1_last_iteration_model_pct",
+                "win_rate_v2_last_iteration_model_pct",
+                "median_delta_final_test_model",
+                "mean_delta_final_test_model",
+                "win_rate_v1_final_test_model_pct",
+                "win_rate_v2_final_test_model_pct",
             ],
         )
         pw_summary_to_save.to_csv(pw_summary_path, index=False)
 
         print(f"\n=== PAIRWISE: {pretty_name} ({param_col}) ===")
-        desc = pw[["delta_aulc_norm", "delta_final"]].describe()
-        desc_to_print = format_numeric_columns(
-            desc.reset_index(),
-            cols=["delta_aulc_norm", "delta_final"],
-        )
+        delta_cols = [
+            c for c in [
+                "delta_aulc_norm",
+                "delta_last_iteration_model",
+                "delta_final_test_model",
+            ]
+            if c in pw.columns
+        ]
+        desc = pw[delta_cols].describe()
+        desc_to_print = format_numeric_columns(desc.reset_index(), cols=delta_cols)
         print(desc_to_print.to_string(index=False))
         print("\nPairwise summary:")
         print(pw_summary_to_save.to_string(index=False))
@@ -1212,7 +1392,6 @@ def main():
         )
 
     print("\n✅ Analysis done:", out_dir.resolve())
-
 
 if __name__ == "__main__":
     main()

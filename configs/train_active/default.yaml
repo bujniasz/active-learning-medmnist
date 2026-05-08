@@ -1,8 +1,8 @@
 # =============================================================================
-# Config for: src/train_active.py
+# Config for: src/training/train_active.py
 #
 # Run with:
-#   python3 src/train_active.py -c configs/train_active/default.yaml
+#   python3 -m src.training.train_active -c configs/train_active/default.yaml
 #
 # This config runs ONE active learning experiment.
 # Use single values only, not lists.

@@ -1,0 +1,108 @@
+# =============================================================================
+# Config for: src/run_experiments.py (Active Learning sweep)
+#
+# Run with:
+#   python3 -m src.run_experiments -c configs/run_experiments/active/active_final_best.yaml
+#
+# Final Active Learning strategy comparison using the BEST hyperparameter setup
+# selected from the BloodMNIST screening.
+#
+# Screening dataset:
+#   - bloodmnist
+#
+# Final evaluation datasets:
+#   - octmnist
+#   - pathmnist
+#   - pneumoniamnist
+#
+# Best hyperparameters from screening:
+#   - init_size_pct: 3
+#   - batch_pct_of_budget: 3
+#   - budget_pct: 30
+#   - epochs_per_cycle: 5
+#
+# This config runs:
+#   3 datasets x 6 strategies x 5 seeds = 90 runs
+# =============================================================================
+
+# === Mode ===
+mode: active
+
+# === Execution ===
+python: python3
+
+train_script: src/training/train_active.py
+
+# If true: skip training and only generate plots from existing CSV.
+no_run: false
+
+# IMPORTANT:
+# Set to true only if you want to delete existing results before running.
+overwrite_results: false
+
+# === Data ===
+# BloodMNIST is intentionally excluded here because it was used for screening.
+data_dirs:
+  - data/octmnist
+  - data/pathmnist
+  - data/pneumoniamnist
+
+# === Output ===
+results_csv: results/final_active_best.csv
+
+out_dir: results/final_active_best
+
+# === Reproducibility ===
+# Same seeds as in the screening experiment.
+seeds:
+  - 17
+  - 246
+  - 9012
+  - 34895
+  - 148932
+
+# === Strategies ===
+# Limited to 6 strategies for plot readability.
+#
+# Selected to cover:
+#   - passive/random baseline
+#   - classic uncertainty sampling
+#   - MC dropout uncertainty
+#   - BALD-style uncertainty
+#   - diversity-aware querying
+#   - gradient-based querying
+strategies:
+  - random
+  - entropy
+  - mc_bald
+  - entropy_diverse
+  - mc_bald_diverse
+  - egl_fc
+
+# === Active Learning mode ===
+al_mode: percent
+
+# === Percent mode ===
+# BEST setup selected from screening.
+init_size_pcts:
+  - 3
+
+batch_pcts_of_budget:
+  - 3
+
+budget_pcts:
+  - 30
+
+# === Absolute mode ===
+# Not used when al_mode: percent.
+init_sizes: null
+batches: null
+budgets: null
+
+# === Training ===
+epochs_per_cycles:
+  - 5
+
+# === Plot filters ===
+# Set to null to include all datasets.
+datasets: null

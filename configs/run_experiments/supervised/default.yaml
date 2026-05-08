@@ -2,7 +2,7 @@
 # Config for: src/run_experiments.py (supervised sweep)
 #
 # Run with:
-#   python3 src/run_experiments.py -c configs/run_experiments/supervised/default.yaml
+#   python3 -m src.run_experiments -c configs/run_experiments/supervised/default.yaml
 #
 # This config runs MULTIPLE supervised (fully supervised) trainings.
 #

@@ -8,6 +8,7 @@
 !/models/readme.txt
 !/results/readme.txt
 !/logs/readme.txt
+*.sh
 
 # ======= GITHUB DEFAULT GITIGNORE =======
 # Byte-compiled / optimized / DLL files

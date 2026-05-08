@@ -1,14 +1,11 @@
 # =============================================================================
-# Config for: src/train_supervised.py
+# Config for: src/training/train_supervised.py
 #
 # Run with:
-#   python3 src/train_supervised.py -c configs/train_supervised/default.yaml
+#   python3 -m src.training.train_supervised -c configs/train_supervised/default.yaml
 #
 # This config runs ONE supervised training.
 # Uses the full training dataset (no Active Learning).
-#
-# For multiple seeds / datasets use:
-#   src/run.py with configs/experiment_launcher/supervised/*.yaml
 # =============================================================================
 
 # === Data ===
