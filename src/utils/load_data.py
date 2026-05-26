@@ -63,10 +63,11 @@ def seed_worker(worker_id):
 
 def prepare_split_supervised(data_dir, batch_size=64, num_workers=2, seed: int | None = None):
     """
-    Returns dataloaders for train/val/test sets.
-    It applies binary label mapping and filtering (if needed).
-    If `seed` is not None, train loader uses a deterministic generator
-    and workers mają zseedowane numpy/random zgodnie z generatorem.
+    Returns dataloaders for train, validation, and test sets.
+    
+    Applies binary label mapping and filtering where applicable.
+    If a `seed` is provided, the training loader uses a deterministic generator 
+    and workers are seeded via `worker_init_fn` to ensure reproducibility.
     """
     splits = ['train', 'val', 'test']
     dataloaders = {}
@@ -102,9 +103,14 @@ def prepare_split_supervised(data_dir, batch_size=64, num_workers=2, seed: int |
 
     return dataloaders['train'], dataloaders['val'], dataloaders['test']
 
-
-
 def prepare_split_active(data_dir: str, split: str = "train", to_nchw: bool = True):
+    """
+    Prepares a specific dataset split for Active Learning workflows.
+    
+    Loads data from NPZ files, applies optional binary mapping, and returns 
+    raw arrays along with dataset metadata (channels and number of classes).
+    Supports converting images to NCHW format for PyTorch compatibility.
+    """
     dataset_name = os.path.basename(os.path.normpath(data_dir))
 
     X, y = load_npz_split(data_dir, split)
@@ -123,16 +129,3 @@ def prepare_split_active(data_dir: str, split: str = "train", to_nchw: bool = Tr
     num_classes = int(np.unique(y).size)
     return X, y, in_channels, num_classes
 
-# TEST 
-# if __name__ == "__main__":
-#     data_dir = "data/pneumoniamnist"
-
-#     train_loader, val_loader, test_loader = get_dataloaders(data_dir, batch_size=8)
-
-#     for x, y in train_loader:
-#         print("x shape:", x.shape)  # expected: [8, 1, 28, 28] or [8, 3, 28, 28]
-#         print("y shape:", y.shape)  # expected: [8]
-#         print("x dtype:", x.dtype)  # expected: torch.float32
-#         print("y dtype:", y.dtype)  # expected: torch.int64
-#         print("y batch:", y.tolist())  # np. [0, 3, 1, 1, 2, 0, 3, 3] NOW [0, 1, 0 ....]
-#         break

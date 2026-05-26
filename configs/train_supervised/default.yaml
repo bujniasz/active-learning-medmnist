@@ -15,11 +15,11 @@ data_dir: data/bloodmnist
 
 # === Output ===
 # Path where the best model checkpoint will be saved.
-model_path: models/rename-test-SV.pth
+model_path: models/prezka.pth
 
 # Path to CSV file where validation/test metrics will be appended.
-results_path: results/rename-test.csv
+results_path: results/prezka.csv
 
 # === Reproducibility ===
 # Random seed used for NumPy, Python random and PyTorch.
-seed: 24
+seed: 214

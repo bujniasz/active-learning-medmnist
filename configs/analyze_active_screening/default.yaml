@@ -18,7 +18,7 @@ results_csv: results/screening_official_final.csv
 
 # === Output ===
 # Directory where analysis results (tables, summaries) will be saved.
-out_dir: results/screening-0605
+out_dir: results/screening-0805
 
 # === Metric ===
 # Metric used to compare and rank experiments.

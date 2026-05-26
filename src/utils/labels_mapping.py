@@ -40,11 +40,10 @@ def map_labels(dataset_name: str, labels: np.ndarray) -> np.ndarray:
         patho_labels = {2, 7, 8}
 
     else:
-        raise ValueError(f"🛑 Unsupported dataset: {dataset_name}")
+        raise ValueError(f"Unsupported dataset: {dataset_name}")
     
     binary_labels = np.array([1 if label in patho_labels else 0 for label in labels], dtype=np.int64)
     return binary_labels
-
 
 def get_valid_indices(dataset_name: str, labels: np.ndarray) -> list[int]:
     """

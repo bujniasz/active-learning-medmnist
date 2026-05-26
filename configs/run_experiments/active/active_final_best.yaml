@@ -43,8 +43,6 @@ overwrite_results: false
 # === Data ===
 # BloodMNIST is intentionally excluded here because it was used for screening.
 data_dirs:
-  - data/octmnist
-  - data/pathmnist
   - data/pneumoniamnist
 
 # === Output ===

@@ -1,1 +1,1 @@
-Path where the outputs are saved.
+This directory is the designated output path for asklogs generated during the Active Learning process.

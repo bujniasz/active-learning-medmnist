@@ -23,16 +23,6 @@ train_supervised.py
 Trains or evaluates a medical image classifier (ResNet18) on a selected MedMNIST subset.
 In training mode, it saves the best model based on validation accuracy.
 In evaluation mode, it loads the saved model and computes test metrics.
-
-Uses:
-- load_data.py: for loading and preparing datasets (via DataLoader)
-- metrics.py: for calculating classification metrics and saving them to CSV
-
-Example usage:
-    # Train a model on the dermamnist dataset:
-    python train_supervised.py -d data/dermamnist -m models/dermamnist_model.pth
-    # Evaluate a previously saved model:
-    python train_supervised.py --eval-only -m models/dermamnist_model.pth
 """
 
 # === ARGUMENTS ===
@@ -102,7 +92,7 @@ def get_num_classes(model) -> int | None:
     # plain resnet
     if hasattr(model, "fc") and hasattr(model.fc, "out_features"):
         return int(model.fc.out_features)
-    # your wrapper model
+    # custom wrapper model
     if hasattr(model, "backbone") and hasattr(model.backbone, "fc") and hasattr(model.backbone.fc, "out_features"):
         return int(model.backbone.fc.out_features)
     return None
@@ -272,7 +262,7 @@ if __name__ == "__main__":
 
         DATA_DIR = checkpoint['data_dir']
 
-        # This call now also handles binary label mapping and filtering
+        # This call also handles binary label mapping and filtering
         _, val_loader, test_loader = prepare_split_supervised(DATA_DIR, batch_size=args.batch_size)
 
         model = get_model(num_classes, in_channels)
@@ -284,7 +274,7 @@ if __name__ == "__main__":
         print("🚀 Mode: training + evaluation (SUPERVISED)")
         DATA_DIR = args.data_dir
 
-        # This call now also handles binary label mapping and filtering
+        # This call also handles binary label mapping and filtering
         train_loader, val_loader, test_loader = prepare_split_supervised(DATA_DIR, batch_size=args.batch_size, seed=args.seed)
 
         sample_x, _ = next(iter(train_loader))

@@ -121,7 +121,6 @@ def append_row_to_csv(row: dict, csv_path: str):
 
     file_exists = os.path.isfile(csv_path)
 
-    # fill missing keys
     for k in fieldnames:
         row.setdefault(k, "")
 

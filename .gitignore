@@ -3,8 +3,9 @@
 /data/*
 /models/* 
 /results/*
-/logs/*  
-!/data/readme.txt
+/logs/*
+!/data/pneumoniamnist/  
+!/data/readme.md
 !/models/readme.txt
 !/results/readme.txt
 !/logs/readme.txt
