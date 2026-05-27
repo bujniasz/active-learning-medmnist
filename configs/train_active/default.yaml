@@ -13,18 +13,18 @@
 # === Data ===
 # Path to a prepared MedMNIST dataset directory.
 # Example: data/bloodmnist, data/octmnist, data/pathmnist
-data_dir: data/octmnist
+data_dir: data/pneumoniamnist
 
 # === Output ===
 # Path where the best model checkpoint will be saved.
-model_path: models/octmnist-final_active_best-egl_fc-init3p-batch3pb-epc5-budget30p-148932.pth
+model_path: models/pneumoniamnist-final_active_best-egl_fc-init3p-batch3pb-epc5-budget30p-148932.pth
 
 # Path to CSV file where validation/test metrics will be appended.
-results_path: results/final_active_best.csv
+results_path: results/pneumoniamnist.csv
 
 # === Reproducibility ===
 # Random seed used for NumPy, Python random and PyTorch.
-seed: 148932
+seed: 777
 
 # === Strategy ===
 # Active Learning query strategy.

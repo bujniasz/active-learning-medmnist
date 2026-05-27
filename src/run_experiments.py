@@ -16,31 +16,21 @@ This script supports two modes:
 
 from __future__ import annotations
 
+# General
 import argparse
 import itertools
 import subprocess
 import sys
 from pathlib import Path
-
-import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
-from matplotlib.ticker import MultipleLocator
 
+# Custom
+from src.analysis.plotting import (
+    make_color_map,
+    compute_best_labeled_count_by_strategy,
+    plot_al_metric_by_strategy,
+)
 from src.utils.shared import load_config
-
-STRATEGY_LABELS = {
-    "random": "Random",
-    "least_confident": "Least confident",
-    "margin": "Margin Sampling",
-    "entropy": "Entropy",
-    "mc_entropy": "MC Entropy",
-    "mc_bald": "BALD",
-    "entropy_diverse": "Entropy + Diversity",
-    "mc_entropy_diverse": "MC Entropy + Diversity",
-    "mc_bald_diverse": "BALD + Diversity",
-    "egl_fc": "EGL",
-}
 
 def script_path_to_module(script_path: str | Path) -> str:
     """
@@ -104,20 +94,6 @@ def apply_config(args):
 
     return args
 
-def make_color_map(strategies: list[str]) -> dict[str, str]:
-    """
-    Deterministic strategy->color mapping.
-    Uses Matplotlib default color cycle, assigned in sorted strategy order.
-    """
-    cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
-    if not cycle:
-        cycle = ["C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]
-
-    cmap: dict[str, str] = {}
-    for i, s in enumerate(sorted(map(str, strategies))):
-        cmap[s] = cycle[i % len(cycle)]
-    return cmap
-
 def run_cmd(cmd: list[str]) -> None:
     print("\n▶ Running:", " ".join(cmd))
     subprocess.run(cmd, check=True)
@@ -125,22 +101,38 @@ def run_cmd(cmd: list[str]) -> None:
 def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
-def compute_best_x_by_strategy(df_val: pd.DataFrame) -> dict[str, int]:
-    """Return {strategy: labeled_count_at_best_mean_val_mean}."""
-    best_x: dict[str, int] = {}
-    for strat, d in df_val.groupby("strategy"):
-        strat = str(strat)
-        g = (
-            d.groupby("labeled_count")["val_mean"]
-            .mean(numeric_only=True)
-            .dropna()
-        )
-        if len(g) == 0:
-            continue
-        maxv = g.max()
-        best_lc = int(g[g == maxv].index.min())
-        best_x[strat] = best_lc
-    return best_x
+def default_out_dir_from_results_csv(results_csv: Path) -> Path:
+    """
+    Build default plot output directory from results CSV path.
+
+    Examples:
+        results/my-experiment/name.csv -> results/my-experiment/name
+        results/name.csv               -> results/name
+        name.csv                       -> name
+    """
+    return results_csv.with_suffix("")
+
+def model_root_from_results_csv(results_csv: str | Path) -> Path:
+    """
+    Build model output root from results CSV path.
+
+    Examples:
+        results/my-experiment/new.csv -> models/my-experiment/new
+        results/screening_official.csv -> models/screening_official
+        some-dir/exp.csv -> models/some-dir/exp
+    """
+    p = Path(results_csv).with_suffix("")
+
+    # Common project convention:
+    # results/foo/bar.csv -> models/foo/bar
+    if not p.is_absolute() and len(p.parts) > 0 and p.parts[0] == "results":
+        rel = Path(*p.parts[1:]) if len(p.parts) > 1 else Path(p.name)
+    else:
+        # Fallback for non-standard paths.
+        # For absolute paths, avoid recreating the whole absolute tree under models/.
+        rel = Path(p.name) if p.is_absolute() else p
+
+    return Path("models") / rel
 
 def build_model_path(
     data_dir: str,
@@ -150,12 +142,23 @@ def build_model_path(
     seed: int,
 ) -> str:
     """
-    Build deterministic active model path:
-    models/{dataset}-{results_name}-{strategy}-{config_tag}-{seed}.pth
+    Build deterministic active model path.
+
+    Example:
+        results_csv = results/my-experiment/new.csv
+        data_dir    = data/bloodmnist
+
+    Output:
+        models/my-experiment/new/bloodmnist/
+            bloodmnist-new-{strategy}-{config_tag}-{seed}.pth
     """
     dataset = Path(data_dir).resolve().name
     results_name = Path(results_csv).stem
-    return f"models/{dataset}-{results_name}-{strategy}-{config_tag}-{seed}.pth"
+
+    model_dir = model_root_from_results_csv(results_csv) / dataset
+    model_name = f"{dataset}-{results_name}-{strategy}-{config_tag}-{seed}.pth"
+
+    return str(model_dir / model_name)
 
 def build_supervised_model_path(
     data_dir: str,
@@ -163,100 +166,29 @@ def build_supervised_model_path(
     seed: int,
 ) -> str:
     """
-    Build deterministic supervised model path:
-    models/{dataset}-{results_name}-supervised-{seed}.pth
+    Build deterministic supervised model path.
+
+    Example:
+        results_csv = results/my-experiment/new.csv
+        data_dir    = data/bloodmnist
+
+    Output:
+        models/my-experiment/new/bloodmnist/
+            bloodmnist-new-supervised-{seed}.pth
     """
     dataset = Path(data_dir).resolve().name
     results_name = Path(results_csv).stem
-    return f"models/{dataset}-{results_name}-supervised-{seed}.pth"
+
+    model_dir = model_root_from_results_csv(results_csv) / dataset
+    model_name = f"{dataset}-{results_name}-supervised-{seed}.pth"
+
+    return str(model_dir / model_name)
 
 def pct_str(x: float) -> str:
     """Pretty % string for filenames/tags."""
     if float(x).is_integer():
         return str(int(x))
     return str(x).replace(".", "p")
-
-def plot_metric(
-    df_val: pd.DataFrame,
-    metric: str,
-    best_x: dict[str, int],
-    title: str,
-    out_path: Path,
-    color_map: dict[str, str],
-) -> None:
-    fig, ax = plt.subplots(figsize=(15, 6))
-
-    x_ticks_all = sorted({int(v) for v in df_val["labeled_count"].dropna().to_numpy()})
-    if len(x_ticks_all) > 12:
-        step = int(np.ceil(len(x_ticks_all) / 12))
-        x_ticks = x_ticks_all[::step]
-        if x_ticks[-1] != x_ticks_all[-1]:
-            x_ticks.append(x_ticks_all[-1])
-    else:
-        x_ticks = x_ticks_all
-
-    for strat, d in df_val.groupby("strategy"):
-        strat = str(strat)
-        line_color = color_map.get(strat, None)
-
-        seed_df = (
-            d.groupby(["seed", "labeled_count"])[metric]
-            .mean()
-            .reset_index(name=metric)
-            .sort_values(by=["seed", "labeled_count"])
-        )
-
-        g = (
-            seed_df.groupby("labeled_count")[metric]
-            .mean()
-            .reset_index(name=metric)
-            .sort_values(by="labeled_count")
-        )
-
-        x = g["labeled_count"].to_numpy()
-        y = g[metric].to_numpy()
-
-        (line,) = ax.plot(
-            x,
-            y,
-            linewidth=2.1,
-            label=STRATEGY_LABELS.get(strat, strat),
-            color=line_color,
-        )
-
-        line_color = line.get_color()
-
-        if strat in best_x:
-            x0 = best_x[strat]
-            if x0 in set(x.tolist()):
-                y0 = float(g.loc[g["labeled_count"] == x0, metric].iloc[0])
-                ax.plot(
-                    [x0],
-                    [y0],
-                    marker="x",
-                    markersize=9,
-                    mew=2.2,
-                    linestyle="None",
-                    color=line_color,
-                )
-
-    ax.set_title(title)
-    ax.set_xlabel("labeled_count")
-    ax.set_ylabel(metric)
-    ax.grid(True, alpha=0.2)
-
-    if x_ticks:
-        ax.set_xticks(x_ticks)
-        ax.set_xticklabels([str(v) for v in x_ticks])
-
-    ax.yaxis.set_major_locator(MultipleLocator(0.05))
-
-    legend_loc = "upper right" if metric == "train_loss" else "lower right"
-    ax.legend(loc=legend_loc, framealpha=0.9)
-
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=200)
-    plt.close(fig)
 
 def main() -> None:
     p = argparse.ArgumentParser()
@@ -271,7 +203,7 @@ def main() -> None:
     p.add_argument("--results-csv", default=None, help="Path to shared CSV")
     p.add_argument("--train-script", default="src/training/train_active.py", help="Path to train_active.py")
     p.add_argument("--supervised-train-script", default="src/training/train_supervised.py", help="Path to train_supervised.py")
-    p.add_argument("--out-dir", default="results/plots", help="Where to write PNG plots")
+    p.add_argument("--out-dir", default=None, help="Optional plot output directory. If not provided, it is derived from results_csv by removing the file suffix")
     p.add_argument("--python", default=sys.executable, help="Python executable to use")
     p.add_argument("--no-run", action="store_true", help="Skip running training; just plot from CSV")
     p.add_argument("--overwrite-results", action="store_true", help="Delete results CSV before running")
@@ -314,8 +246,17 @@ def main() -> None:
     results_csv = Path(args.results_csv)
     train_script = Path(args.train_script)
     supervised_train_script = Path(args.supervised_train_script)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = (
+        Path(args.out_dir)
+        if args.out_dir is not None
+        else default_out_dir_from_results_csv(results_csv)
+    )
+    # out_dir is only needed for Active Learning plotting.
+    # Supervised mode does not generate plots, so we avoid creating empty folders.
+    if args.mode == "active":
+        if out_dir is None:
+            raise SystemExit("out_dir must be provided for active mode plotting.")
+        out_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.no_run:
         if args.data_dirs is None:
@@ -374,6 +315,13 @@ def main() -> None:
     else:
         use_pct_mode = False
         use_abs_mode = False
+
+    if args.no_run and args.overwrite_results:
+        raise SystemExit(
+            "Invalid config: no_run=true and overwrite_results=true cannot be used together. "
+            "no_run=true uses results_csv as an existing input file for plotting, "
+            "so deleting it would make the run impossible."
+        )
 
     if args.overwrite_results and results_csv.exists():
         print(f"🧹 Removing existing results CSV: {results_csv}")
@@ -603,7 +551,7 @@ def main() -> None:
     valid_groups = df_val.dropna(subset=group_cols)
 
     for name, group_df in valid_groups.groupby(group_cols):
-        best_x = compute_best_x_by_strategy(group_df)
+        best_x = compute_best_labeled_count_by_strategy(group_df)
 
         if plot_pct_mode:
             dataset_name, init_pct, batch_pct, epc, budget_pct = name
@@ -649,7 +597,7 @@ def main() -> None:
                 print(f"⚠️ Missing column {metric} in CSV; skipping plot")
                 continue
             ensure_parent(Path(out_path))
-            plot_metric(group_df, metric, best_x, title, out_path, color_map)
+            plot_al_metric_by_strategy(group_df, metric, best_x, title, out_path, color_map)
 
     print("\n✅ Plots written to:", out_dir.resolve())
 

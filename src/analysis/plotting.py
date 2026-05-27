@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+# General
 from pathlib import Path
+import numpy as np
+import pandas as pd
 
+# Matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import MaxNLocator, MultipleLocator
-import numpy as np
-import pandas as pd
 
 # analyze_active_screening.py
 def sanitize_filename_part(x) -> str:
@@ -588,4 +590,131 @@ def plot_main_effects(
 
     fig.tight_layout()
     fig.savefig(main_effects_dir / f"main_effects_{pretty_name}.png", dpi=180)
+    plt.close(fig)
+
+# run_experiments.py
+STRATEGY_LABELS = {
+    "random": "Random",
+    "least_confident": "Least confident",
+    "margin": "Margin Sampling",
+    "entropy": "Entropy",
+    "mc_entropy": "MC Entropy",
+    "mc_bald": "BALD",
+    "entropy_diverse": "Entropy + Diversity",
+    "mc_entropy_diverse": "MC Entropy + Diversity",
+    "mc_bald_diverse": "BALD + Diversity",
+    "egl_fc": "EGL",
+}
+
+def make_color_map(strategies: list[str]) -> dict[str, str]:
+    """
+    Deterministic strategy->color mapping.
+    Uses Matplotlib default color cycle, assigned in sorted strategy order.
+    """
+    cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
+    if not cycle:
+        cycle = ["C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]
+
+    cmap: dict[str, str] = {}
+    for i, s in enumerate(sorted(map(str, strategies))):
+        cmap[s] = cycle[i % len(cycle)]
+    return cmap
+
+def compute_best_labeled_count_by_strategy(df_val: pd.DataFrame) -> dict[str, int]:
+    """Return {strategy: labeled_count_at_best_mean_val_mean}."""
+    best_x: dict[str, int] = {}
+    for strat, d in df_val.groupby("strategy"):
+        strat = str(strat)
+        g = (
+            d.groupby("labeled_count")["val_mean"]
+            .mean(numeric_only=True)
+            .dropna()
+        )
+        if len(g) == 0:
+            continue
+        maxv = g.max()
+        best_lc = int(g[g == maxv].index.min())
+        best_x[strat] = best_lc
+    return best_x
+
+def plot_al_metric_by_strategy(
+    df_val: pd.DataFrame,
+    metric: str,
+    best_x: dict[str, int],
+    title: str,
+    out_path: Path,
+    color_map: dict[str, str],
+) -> None:
+    fig, ax = plt.subplots(figsize=(15, 6))
+
+    x_ticks_all = sorted({int(v) for v in df_val["labeled_count"].dropna().to_numpy()})
+    if len(x_ticks_all) > 12:
+        step = int(np.ceil(len(x_ticks_all) / 12))
+        x_ticks = x_ticks_all[::step]
+        if x_ticks[-1] != x_ticks_all[-1]:
+            x_ticks.append(x_ticks_all[-1])
+    else:
+        x_ticks = x_ticks_all
+
+    for strat, d in df_val.groupby("strategy"):
+        strat = str(strat)
+        line_color = color_map.get(strat, None)
+
+        seed_df = (
+            d.groupby(["seed", "labeled_count"])[metric]
+            .mean()
+            .reset_index(name=metric)
+            .sort_values(by=["seed", "labeled_count"])
+        )
+
+        g = (
+            seed_df.groupby("labeled_count")[metric]
+            .mean()
+            .reset_index(name=metric)
+            .sort_values(by="labeled_count")
+        )
+
+        x = g["labeled_count"].to_numpy()
+        y = g[metric].to_numpy()
+
+        (line,) = ax.plot(
+            x,
+            y,
+            linewidth=2.1,
+            label=STRATEGY_LABELS.get(strat, strat),
+            color=line_color,
+        )
+
+        line_color = line.get_color()
+
+        if strat in best_x:
+            x0 = best_x[strat]
+            if x0 in set(x.tolist()):
+                y0 = float(g.loc[g["labeled_count"] == x0, metric].iloc[0])
+                ax.plot(
+                    [x0],
+                    [y0],
+                    marker="x",
+                    markersize=9,
+                    mew=2.2,
+                    linestyle="None",
+                    color=line_color,
+                )
+
+    ax.set_title(title)
+    ax.set_xlabel("labeled_count")
+    ax.set_ylabel(metric)
+    ax.grid(True, alpha=0.2)
+
+    if x_ticks:
+        ax.set_xticks(x_ticks)
+        ax.set_xticklabels([str(v) for v in x_ticks])
+
+    ax.yaxis.set_major_locator(MultipleLocator(0.05))
+
+    legend_loc = "upper right" if metric == "train_loss" else "lower right"
+    ax.legend(loc=legend_loc, framealpha=0.9)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
     plt.close(fig)

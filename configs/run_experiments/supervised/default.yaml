@@ -32,9 +32,6 @@ python: python3
 # Path to train_supervised.py script.
 supervised_train_script: src/training/train_supervised.py
 
-# If true: skip training and only reuse existing results.
-no_run: false
-
 # If true: delete existing results_csv before running.
 overwrite_results: false
 
@@ -44,18 +41,25 @@ overwrite_results: false
 #   - data/bloodmnist
 #   - data/pathmnist
 data_dirs:
-  - data/bloodmnist
+  - data/pneumoniamnist
 
 # === Output ===
 # CSV file where all experiment results will be stored.
-results_csv: results/rename-test.csv
+#
+# Supervised checkpoints are saved automatically under:
+#   models/<results_csv_without_results_prefix_and_suffix>/<dataset>/
+#
+# Example:
+#   results_csv: results/final_supervised/results.csv
+#
+# Checkpoints:
+#   models/final_supervised/results/octmnist/...
+#   models/final_supervised/results/pathmnist/...
+results_csv: results/run-super/run-super.csv
 
-# Directory for outputs (reserved for future use; plotting not used yet).
-out_dir: results/run-rename-test
 
 # === Reproducibility ===
 # List of random seeds.
 # Each seed defines one independent training run.
 seeds:
-  - 434
-  - 2333
+  - 889

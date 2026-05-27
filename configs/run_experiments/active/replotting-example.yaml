@@ -1,0 +1,22 @@
+no_run: true
+overwrite_results: false
+
+results_csv: results/existing.csv
+out_dir: results/new-plots
+
+data_dirs: null
+seeds: null
+strategies: null
+
+al_mode: percent
+
+init_size_pcts: null
+batch_pcts_of_budget: null
+budget_pcts: null
+
+init_sizes: null
+batches: null
+budgets: null
+
+epochs_per_cycles: null
+datasets: null

@@ -4,6 +4,7 @@ import os
 import argparse
 import random
 import numpy as np
+from pathlib import Path
 
 # Torch
 import torch
@@ -195,6 +196,8 @@ def run_supervised_loop(model, train_loader, val_loader, *,
         if sel > best_sel + delta:
             best_sel = sel
             epochs_without_improvement = 0
+
+            Path(model_path).parent.mkdir(parents=True, exist_ok=True)
 
             torch.save({
                 'model_state_dict': model.state_dict(),

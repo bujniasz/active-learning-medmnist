@@ -11,14 +11,14 @@
 # === Data ===
 # Path to a prepared MedMNIST dataset directory.
 # Example: data/bloodmnist, data/octmnist, data/pathmnist
-data_dir: data/bloodmnist
+data_dir: data/pneumoniamnist
 
 # === Output ===
 # Path where the best model checkpoint will be saved.
-model_path: models/prezka.pth
+model_path: models/thisdoesnotexistpt2/test.pth
 
 # Path to CSV file where validation/test metrics will be appended.
-results_path: results/prezka.csv
+results_path: results/thisdoesnotexistpt2/test.csv
 
 # === Reproducibility ===
 # Random seed used for NumPy, Python random and PyTorch.

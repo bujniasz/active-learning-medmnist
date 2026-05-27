@@ -90,6 +90,26 @@ def build_batch_schedule_from_budget(budget: int, n_cycles: int) -> list[int]:
 def _pct_to_count(pct: float, total: int) -> int:
     return max(1, int(round(total * float(pct) / 100.0)))
 
+def build_ask_log_path(model_path: str | Path) -> Path:
+    """
+    Build ask-log path that mirrors the model checkpoint path.
+
+    Example:
+        models/run-active/2705/pneumoniamnist/model.pth
+
+    becomes:
+        logs/run-active/2705/pneumoniamnist/model.asklog.json
+    """
+    p = Path(model_path)
+
+    if not p.is_absolute() and len(p.parts) > 0 and p.parts[0] == "models":
+        rel = p.relative_to("models")
+    else:
+        # Fallback for non-standard paths: keep only filename under logs/.
+        rel = Path(p.name)
+
+    return Path("logs") / rel.with_suffix(".asklog.json")
+
 def resolve_active_params(args, train_size: int) -> dict:
     # init_size: absolute XOR percent
     if args.init_size is not None and args.init_size_pct is not None:
@@ -933,7 +953,7 @@ def run_active_loop(
             print(f"✅ NEW BEST (by {args.select_metric}) → {best_sel:.4f}")
 
     # Save ask log to logs/ instead of models/
-    ask_log_path = Path("logs") / Path(model_path).with_suffix(".asklog.json").name
+    ask_log_path = build_ask_log_path(model_path)
 
     # ensure logs directory exists
     ask_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -954,6 +974,10 @@ if __name__ == "__main__":
     if args.model_path is None:
         raise SystemExit("model_path must be provided either via CLI or config")
     
+    # In training mode, create checkpoint directory before any torch.save().
+    if not args.eval_only:
+        Path(args.model_path).parent.mkdir(parents=True, exist_ok=True)
+
     if args.results_path is not None:
         RESULTS_PATH = args.results_path
     else:
