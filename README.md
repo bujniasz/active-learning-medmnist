@@ -1,4 +1,4 @@
-# active-learning-medmnist
+# Active Learning Medmnist
 
 This repository contains code, configuration files and selected experiment artifacts for research on applying **Active Learning** to medical image classification using **MedMNIST2D** datasets.
 
@@ -136,7 +136,6 @@ python3 -m src.analysis.analyze_active_screening -c configs/analyze_active_scree
 ## Repository Structure
 
 ```text
-.
   configs/
   data/
   logs/

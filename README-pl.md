@@ -1,4 +1,4 @@
-# active-learning-medmnist
+# Active Learning Medmnist
 
 Repozytorium zawiera kod, konfiguracje i wybrane artefakty eksperymentów do pracy badawczej nad zastosowaniem **Active Learning** w klasyfikacji obrazów medycznych ze zbiorów **MedMNIST2D**.
 
@@ -136,7 +136,6 @@ python3 -m src.analysis.analyze_active_screening -c configs/analyze_active_scree
 ## Struktura Repozytorium
 
 ```text
-.
   configs/
   data/
   logs/
