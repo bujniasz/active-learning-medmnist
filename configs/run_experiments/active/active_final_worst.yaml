@@ -50,8 +50,6 @@ data_dirs:
 # === Output ===
 results_csv: results/final_active_worst.csv
 
-out_dir: results/final_active_worst
-
 # === Reproducibility ===
 # Same seeds as in the screening experiment.
 seeds:

@@ -26,9 +26,6 @@ python: python3
 
 supervised_train_script: src/training/train_supervised.py
 
-# If true: skip training and only reuse existing results.
-no_run: false
-
 # IMPORTANT:
 # Set to true only if you want to delete existing results before running.
 overwrite_results: false
@@ -43,8 +40,6 @@ data_dirs:
 
 # === Output ===
 results_csv: results/final_supervised.csv
-
-out_dir: results/final_supervised
 
 # === Reproducibility ===
 # Same seeds as in screening and final Active Learning experiments.

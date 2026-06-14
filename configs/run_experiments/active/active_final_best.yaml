@@ -43,12 +43,12 @@ overwrite_results: false
 # === Data ===
 # BloodMNIST is intentionally excluded here because it was used for screening.
 data_dirs:
+  - data/octmnist
   - data/pneumoniamnist
+  - data/pathmnist
 
 # === Output ===
 results_csv: results/final_active_best.csv
-
-out_dir: results/final_active_best
 
 # === Reproducibility ===
 # Same seeds as in the screening experiment.
