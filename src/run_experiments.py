@@ -351,7 +351,7 @@ def main() -> None:
                     "-m",
                     script_path_to_module(supervised_train_script),
                     "-d", str(data_dir),
-                    "-m", str(model_path),
+                    "-mp", str(model_path),
                     "-r", str(results_csv),
                     "--seed", str(seed),
                 ]
