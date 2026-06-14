@@ -4,11 +4,26 @@
 /models/* 
 /results/*
 /logs/*
+
 !/data/pneumoniamnist/  
 !/data/readme.md
-!/models/readme.txt
-!/results/readme.txt
-!/logs/readme.txt
+
+!/logs/readme.md
+!/logs/final_active_best/
+/logs/final_active_best/*
+!/logs/final_active_best/octmnist/
+!/logs/final_active_best/octmnist/*.asklog.json
+
+!/models/readme.md
+!/models/final_active_best/
+/models/final_active_best/*
+!/models/final_active_best/octmnist/
+/models/final_active_best/octmnist/*
+!/models/final_active_best/octmnist/octmnist-final_active_best-egl_fc-init3p-batch3pb-epc5-budget30p-17.pth
+
+!/results/readme.md
+!/results/final_*.csv
+
 *.sh
 
 # ======= GITHUB DEFAULT GITIGNORE =======

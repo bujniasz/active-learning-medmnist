@@ -1,1 +1,0 @@
-Path where the config files for executable scripts are stored.
