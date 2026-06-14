@@ -1,0 +1,72 @@
+# =============================================================================
+# Config for: src/training/train_active.py
+#
+# Run with:
+#   python3 -m src.training.train_active -c configs/train_active/default.yaml
+#
+# This config runs ONE active learning experiment.
+# Use single values only, not lists.
+# For multiple datasets / seeds / strategies / budgets use:
+#   src/run.py with configs/experiment_launcher/active/*.yaml
+# =============================================================================
+
+# === Data ===
+# Path to a prepared MedMNIST dataset directory.
+# Example: data/bloodmnist, data/octmnist, data/pathmnist
+data_dir: data/pneumoniamnist
+
+# === Output ===
+# Path where the best model checkpoint will be saved.
+model_path: models/pneumoniamnist-final_active_best-egl_fc-init3p-batch3pb-epc5-budget30p-148932.pth
+
+# Path to CSV file where validation/test metrics will be appended.
+results_path: results/pneumoniamnist.csv
+
+# === Reproducibility ===
+# Random seed used for NumPy, Python random and PyTorch.
+seed: 777
+
+# === Strategy ===
+# Active Learning query strategy.
+# Available:
+#   random
+#   least_confident
+#   margin
+#   entropy
+#   mc_entropy
+#   mc_bald
+#   entropy_diverse
+#   mc_entropy_diverse
+#   mc_bald_diverse
+#   egl_fc
+strategy: egl_fc
+
+# === Active Learning mode ===
+# Choose how init size, budget and batch size are specified.
+# Available:
+#   percent  - use *_pct fields below
+#   absolute - use absolute integer fields below
+al_mode: percent
+
+# === Percent mode ===
+# Used only when al_mode: percent.
+# init_size_pct: initial labeled set size as % of training set.
+# budget_pct: total AL query budget as % of training set.
+# batch_pct_of_budget: one query batch as % of resolved budget.
+init_size_pct: 3
+budget_pct: 30
+batch_pct_of_budget: 3
+
+# === Absolute mode ===
+# Used only when al_mode: absolute.
+# Set percent fields to null or ignore them when using absolute mode.
+# init_size: initial labeled set size as number of samples.
+# budget: total AL query budget as number of samples.
+# batch: number of queried samples per AL cycle.
+init_size: null
+budget: null
+batch: null
+
+# === Training ===
+# Number of training epochs after each AL query cycle.
+epochs_per_cycle: 5

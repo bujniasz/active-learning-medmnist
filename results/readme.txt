@@ -1,1 +1,0 @@
-Path where the csv with results should be saved after training.

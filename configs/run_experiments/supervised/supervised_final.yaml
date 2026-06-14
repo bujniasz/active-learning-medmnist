@@ -1,0 +1,51 @@
+# =============================================================================
+# Config for: src/run_experiments.py (supervised sweep)
+#
+# Run with:
+#   python3 -m src.run_experiments -c configs/run_experiments/supervised/supervised_final.yaml
+#
+# Final supervised baseline experiment.
+#
+# This config trains fully supervised models on the same final evaluation datasets
+# and seeds as the Active Learning final experiments.
+#
+# Final evaluation datasets:
+#   - octmnist
+#   - pathmnist
+#   - pneumoniamnist
+#
+# This config runs:
+#   3 datasets x 5 seeds = 15 runs
+# =============================================================================
+
+# === Mode ===
+mode: supervised
+
+# === Execution ===
+python: python3
+
+supervised_train_script: src/training/train_supervised.py
+
+# IMPORTANT:
+# Set to true only if you want to delete existing results before running.
+overwrite_results: false
+
+# === Data ===
+# Same datasets as in the final Active Learning experiments.
+# BloodMNIST is intentionally excluded because it was used for screening.
+data_dirs:
+  - data/octmnist
+  - data/pathmnist
+  - data/pneumoniamnist
+
+# === Output ===
+results_csv: results/final_supervised.csv
+
+# === Reproducibility ===
+# Same seeds as in screening and final Active Learning experiments.
+seeds:
+  - 17
+  - 246
+  - 9012
+  - 34895
+  - 148932

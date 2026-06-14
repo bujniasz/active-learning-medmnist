@@ -1,0 +1,65 @@
+# =============================================================================
+# Config for: src/run_experiments.py (supervised sweep)
+#
+# Run with:
+#   python3 -m src.run_experiments -c configs/run_experiments/supervised/default.yaml
+#
+# This config runs MULTIPLE supervised (fully supervised) trainings.
+#
+# Each combination of:
+#   - dataset
+#   - seed
+#
+# defines one independent run.
+#
+# Example:
+#   data_dirs: [data/bloodmnist, data/pathmnist]
+#   seeds: [1, 24]
+#
+# → will run 2 x 2 = 4 supervised experiments
+#
+# Results from all runs are appended to one CSV file.
+# =============================================================================
+
+# === Mode ===
+# Must be "supervised" for supervised experiments.
+mode: supervised
+
+# === Execution ===
+# Python executable to use.
+python: python3
+
+# Path to train_supervised.py script.
+supervised_train_script: src/training/train_supervised.py
+
+# If true: delete existing results_csv before running.
+overwrite_results: false
+
+# === Data ===
+# List of dataset directories.
+# Example:
+#   - data/bloodmnist
+#   - data/pathmnist
+data_dirs:
+  - data/pneumoniamnist
+
+# === Output ===
+# CSV file where all experiment results will be stored.
+#
+# Supervised checkpoints are saved automatically under:
+#   models/<results_csv_without_results_prefix_and_suffix>/<dataset>/
+#
+# Example:
+#   results_csv: results/final_supervised/results.csv
+#
+# Checkpoints:
+#   models/final_supervised/results/octmnist/...
+#   models/final_supervised/results/pathmnist/...
+results_csv: results/run-super/run-super.csv
+
+
+# === Reproducibility ===
+# List of random seeds.
+# Each seed defines one independent training run.
+seeds:
+  - 889

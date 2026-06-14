@@ -1,0 +1,25 @@
+# =============================================================================
+# Config for: src/training/train_supervised.py
+#
+# Run with:
+#   python3 -m src.training.train_supervised -c configs/train_supervised/default.yaml
+#
+# This config runs ONE supervised training.
+# Uses the full training dataset (no Active Learning).
+# =============================================================================
+
+# === Data ===
+# Path to a prepared MedMNIST dataset directory.
+# Example: data/bloodmnist, data/octmnist, data/pathmnist
+data_dir: data/pneumoniamnist
+
+# === Output ===
+# Path where the best model checkpoint will be saved.
+model_path: models/thisdoesnotexistpt2/test.pth
+
+# Path to CSV file where validation/test metrics will be appended.
+results_path: results/thisdoesnotexistpt2/test.csv
+
+# === Reproducibility ===
+# Random seed used for NumPy, Python random and PyTorch.
+seed: 214

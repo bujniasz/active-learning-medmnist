@@ -8,8 +8,9 @@ Cython<=3.0.11
 joblib<=1.4.2
 
 #MAIN PACKAGES
-git+https://github.com/ntucllab/libact.git # Biblioteka do aktywnego uczenia
-torch              # Główna biblioteka PyTorch - trenowanie modeli głębokiego uczenia
-torchvision        # Zawiera gotowe architektury (np. ResNet) oraz narzędzia do przetwarzania obrazów
-medmnist           # Zawiera przygotowane zbiory danych MedMNIST oraz interfejsy do ich ładowania
-tqdm               # Pasek postępu w pętlach treningowych i ewaluacyjnych
+git+https://github.com/ntucllab/libact.git
+torch
+torchvision
+medmnist
+tqdm
+pyyaml
