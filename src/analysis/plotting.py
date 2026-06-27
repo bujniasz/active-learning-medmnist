@@ -176,22 +176,22 @@ def plot_screening_curves(
     group_cols = [c for c in candidate_group_cols if c in df.columns and c != param_col]
 
     ylabel_map = {
-        "val_mean": "Średnia metryka walidacyjna",
-        "acc": "Accuracy",
-        "f1_macro": "F1 macro",
-        "auc": "AUC",
-        "ap": "Average Precision",
-        "train_loss": "Strata treningowa",
+        "val_mean": "Średnia metryka walidacyjna (val_mean) [-]",
+        "acc": "Accuracy [-]",
+        "f1_macro": "F1 macro [-]",
+        "auc": "AUC [-]",
+        "ap": "Average Precision [-]",
+        "train_loss": "Strata treningowa [-]",
     }
 
     param_label_map = {
-        "init_size": "init_size",
-        "init_size_pct": "init_size (%)",
-        "batch": "batch",
-        "batch_pct_of_budget": "batch (% budżetu)",
-        "budget": "budget",
-        "budget_pct": "budget (%)",
-        "epc": "epc",
+        "init_size": "rozmiar zbioru początkowego",
+        "init_size_pct": "rozmiar zbioru początkowego",
+        "batch": "rozmiar wsadu anotacyjnego",
+        "batch_pct_of_budget": "rozmiar wsadu anotacyjnego",
+        "budget": "budżet anotacji",
+        "budget_pct": "budżet anotacji",
+        "epc": "liczba epok na cykl",
     }
 
     short_label_map = {
@@ -217,8 +217,18 @@ def plot_screening_curves(
             plt.close(fig)
             continue
 
-        x_min = min(x_all)
         x_max = max(x_all)
+        start_markers = []
+
+        def curve_value_label(value) -> str:
+            if isinstance(value, (int, float, np.floating)):
+                text = f"{value:g}"
+            else:
+                text = str(value)
+
+            if param_col in {"init_size_pct", "batch_pct_of_budget", "budget_pct"}:
+                return f"{text}%"
+            return text
 
         for val in values:
             sub = g[g[param_col] == val].copy()
@@ -232,9 +242,9 @@ def plot_screening_curves(
             if len(avg) == 0:
                 continue
 
-            val_txt = f"{val:g}" if isinstance(val, (int, float, np.floating)) else str(val)
+            val_txt = curve_value_label(val)
 
-            ax.plot(
+            (line,) = ax.plot(
                 avg["labeled_count"],
                 avg[metric],
                 linewidth=2.0,
@@ -242,8 +252,11 @@ def plot_screening_curves(
                 markersize=4.0,
                 markeredgecolor="black",
                 markeredgewidth=0.6,
-                label=f"{param_label_map.get(param_col, param_col)} = {val_txt}",
+                label=val_txt,
             )
+
+            x_start = int(avg["labeled_count"].min())
+            start_markers.append((x_start, f"{val_txt} = {x_start}", line.get_color()))
 
         if not isinstance(key, tuple):
             key = (key,)
@@ -268,39 +281,43 @@ def plot_screening_curves(
         title_suffix = " | ".join(fixed_parts)
 
         ax.set_title(
-            f"Krzywe screeningu: {param_label_map.get(param_col, param_col)}"
-            + (f"\n{title_suffix}" if title_suffix else "")
+            f"{param_label_map.get(param_col, param_col).capitalize()}: przykładowa krzywa uczenia dla ustalonej konfiguracji"
         )
 
-        ax.set_xlabel("Liczba oznaczonych próbek")
+        ax.set_xlabel("Liczba oznaczonych próbek [-]")
         ax.set_ylabel(ylabel_map.get(metric, metric))
         ax.grid(alpha=0.3)
 
-        ax.axvline(
-            x_min,
-            linestyle="--",
-            linewidth=1.5,
-            color="black",
-            alpha=0.8,
-        )
-
-        y_top = ax.get_ylim()[1]
-        ax.text(
-            x_min,
-            y_top,
-            f" start = {int(x_min)}",
-            ha="left",
-            va="bottom",
-            fontsize=9,
-        )
+        y_min, y_top = ax.get_ylim()
+        y_span = y_top - y_min
+        for i, (x_start, label, color) in enumerate(start_markers):
+            y_text = y_top - (0.025 + 0.055 * i) * y_span
+            ax.axvline(
+                x_start,
+                linestyle="--",
+                linewidth=1.5,
+                color=color,
+                alpha=0.9,
+            )
+            ax.text(
+                x_start,
+                y_text,
+                f" {label}",
+                ha="left",
+                va="top",
+                fontsize=9,
+                color="black",
+                bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=1.5),
+            )
 
         if len(x_all) <= 10:
             xticks = x_all
         else:
             step = max(1, len(x_all) // 8)
             xticks = x_all[::step]
-            if x_min not in xticks:
-                xticks = [x_min] + xticks
+            for x_start, _, _ in start_markers:
+                if x_start not in xticks:
+                    xticks = [x_start] + xticks
             if x_max not in xticks:
                 xticks = xticks + [x_max]
             xticks = sorted(set(int(x) for x in xticks))
@@ -327,23 +344,39 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
     eps = 0.002
 
     metric_labels = {
-        "delta_aulc_norm": "Różnica AULC (znormalizowanego)",
-        "delta_last_iteration_model": "Różnica wyniku modelu z ostatniej iteracji",
-        "delta_final_test_model": "Różnica wyniku finalnego modelu testowego",
+        "delta_aulc_norm": "Różnica AULC (znormalizowanego) [-]",
+        "delta_last_iteration_model": "Różnica wyniku walidacyjnego [-]",
+        "delta_final_test_model": "Różnica średniej z metryk testowych [-]",
     }
 
     metric_titles = {
-        "delta_aulc_norm": "Rozkład różnic AULC",
-        "delta_last_iteration_model": "Rozkład różnic modelu z ostatniej iteracji",
-        "delta_final_test_model": "Rozkład różnic finalnego modelu testowego",
+        "delta_aulc_norm": "rozkład różnic AULC",
+        "delta_last_iteration_model": "rozkład różnic wyniku walidacyjnego",
+        "delta_final_test_model": "rozkład różnic średniej z metryk testowych",
+    }
+
+    winrate_titles = {
+        "delta_aulc_norm": "bilans porównań AULC",
+        "delta_last_iteration_model": "bilans porównań wyniku walidacyjnego",
+        "delta_final_test_model": "bilans porównań średniej z metryk testowych",
     }
 
     param_labels = {
-        "batch": "batch",
-        "budget": "budget",
-        "epc": "epc",
-        "init_size": "init_size",
+        "batch": "rozmiar wsadu anotacyjnego",
+        "budget": "budżet anotacji",
+        "epc": "liczba epok na cykl",
+        "init_size": "rozmiar zbioru początkowego",
     }
+
+    def value_label(value) -> str:
+        if isinstance(value, (int, float, np.floating)):
+            text = f"{value:g}"
+        else:
+            text = str(value)
+
+        if pretty_name in {"batch", "budget", "init_size"}:
+            return f"{text}%"
+        return text
 
     color_win_v1 = "tab:green"
     color_tie = "lightgray"
@@ -354,8 +387,8 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
         v1 = pw_cmp["v1"].iloc[0]
         v2 = pw_cmp["v2"].iloc[0]
 
-        v1_txt = f"{v1:g}" if isinstance(v1, (int, float, np.floating)) else str(v1)
-        v2_txt = f"{v2:g}" if isinstance(v2, (int, float, np.floating)) else str(v2)
+        v1_txt = value_label(v1)
+        v2_txt = value_label(v2)
 
         for col, suffix in [
             ("delta_aulc_norm", "aulc"),
@@ -394,6 +427,8 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
             fig_hist, ax_hist = plt.subplots(figsize=(8.2, 4.8))
 
             neg_edges: list[float] = [float(x) for x in edges if x <= -eps]
+            if n_neg > 0 and len(neg_edges) < 2:
+                neg_edges = [float(neg.min()), -eps]
             if n_neg > 0 and len(neg_edges) >= 2:
                 ax_hist.hist(
                     neg,
@@ -417,6 +452,8 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
                 )
 
             pos_edges: list[float] = [float(x) for x in edges if x >= eps]
+            if n_pos > 0 and len(pos_edges) < 2:
+                pos_edges = [eps, float(pos.max())]
             if n_pos > 0 and len(pos_edges) >= 2:
                 ax_hist.hist(
                     pos,
@@ -431,10 +468,10 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
             ax_hist.axvline(0.0, linestyle="--", linewidth=1.8, color="black")
 
             ax_hist.set_title(
-                f"{metric_titles[col]}: {param_labels.get(pretty_name, pretty_name)} ({v1_txt} vs {v2_txt})"
+                f"{param_labels.get(pretty_name, pretty_name).capitalize()}:\n{metric_titles[col]}"
             )
             ax_hist.set_xlabel(metric_labels[col])
-            ax_hist.set_ylabel("Liczba par")
+            ax_hist.set_ylabel("Liczba par [-]")
             ax_hist.yaxis.set_major_locator(MaxNLocator(integer=True))
             ax_hist.grid(axis="y", alpha=0.3)
             ax_hist.legend(loc="best", framealpha=0.95)
@@ -467,11 +504,11 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
             )
 
             ax_bar.set_title(
-                f"Bilans porównań: {param_labels.get(pretty_name, pretty_name)} ({v1_txt} vs {v2_txt})"
+                f"{param_labels.get(pretty_name, pretty_name).capitalize()}:\n{winrate_titles[col]}"
             )
             ax_bar.set_xticks(x)
             ax_bar.set_xticklabels(categories, rotation=20, ha="right")
-            ax_bar.set_ylabel("Liczba par")
+            ax_bar.set_ylabel("Liczba par [-]")
             ax_bar.yaxis.set_major_locator(MaxNLocator(integer=True))
             ax_bar.grid(axis="y", alpha=0.3)
 
@@ -543,54 +580,108 @@ def plot_main_effects(
         else:
             labels.append(str(v))
 
-    y = pd.to_numeric(plot_df["mean_aulc_norm"], errors="coerce").to_numpy()
-
     cmap = plt.get_cmap("tab10")
     colors = [cmap(i % 10) for i in range(len(labels))]
-
-    fig, ax = plt.subplots(figsize=(7.2, 4.8))
-
     x_pos = np.arange(len(labels))
-    ax.bar(
-        x_pos,
-        y,
-        color=colors,
-        width=0.8,
-        edgecolor="black",
-        linewidth=1.0,
-    )
 
     xlabel_map = {
-        "batch": "batch (% budżetu)",
-        "budget": "budget (%)",
-        "epc": "liczba epok na cykl",
-        "init_size": "rozmiar zbioru początkowego (%)",
+        "batch": "Rozmiar wsadu anotacyjnego [% budżetu]",
+        "budget": "Budżet anotacji [% zbioru treningowego]",
+        "epc": "Liczba epok na cykl",
+        "init_size": "Rozmiar zbioru początkowego [% zbioru treningowego]",
     }
 
-    title_map = {
-        "batch": "Wpływ parametru batch",
-        "budget": "Wpływ parametru budget",
-        "epc": "Wpływ parametru epc",
-        "init_size": "Wpływ parametru init_size",
+    title_aulc_map = {
+        "batch": "Wpływ rozmiaru wsadu anotacyjnego na przebieg aktywnego uczenia",
+        "budget": "Wpływ budżetu anotacji na przebieg aktywnego uczenia",
+        "epc": "Wpływ liczby epok na cykl na przebieg aktywnego uczenia",
+        "init_size": "Wpływ rozmiaru zbioru początkowego na przebieg aktywnego uczenia",
     }
 
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels(labels)
+    title_test_map = {
+        "batch": "Wpływ rozmiaru wsadu anotacyjnego na wynik testowy",
+        "budget": "Wpływ budżetu anotacji na wynik testowy",
+        "epc": "Wpływ liczby epok na cykl na wynik testowy",
+        "init_size": "Wpływ rozmiaru zbioru początkowego na wynik testowy",
+    }
 
-    ax.set_title(title_map.get(pretty_name, f"Wpływ parametru {pretty_name}"))
-    ax.set_xlabel(xlabel_map.get(pretty_name, pretty_name))
-    ax.set_ylabel("Średni AULC (znormalizowany)")
+    ylim_map = {
+        "batch": (0.84, 0.885),
+        "budget": (0.835, 0.885),
+        "epc": (0.83, 0.895),
+        "init_size": (0.835, 0.885),
+    }
 
-    ax.set_ylim(0.8, 0.9)
-    ax.yaxis.set_major_locator(MultipleLocator(0.01))
-    ax.yaxis.set_minor_locator(MultipleLocator(0.005))
+    test_ylim_map = {
+        "batch": (0.92, 0.945),
+        "budget": (0.91, 0.95),
+        "epc": (0.92, 0.945),
+        "init_size": (0.925, 0.942),
+    }
 
-    ax.grid(axis="y", which="major", alpha=0.35)
-    ax.grid(axis="y", which="minor", alpha=0.15)
+    def draw_bar_chart(
+        *,
+        metric_col: str,
+        title: str,
+        ylabel: str,
+        out_name: str,
+        ylim: tuple[float, float] | None,
+    ) -> None:
+        if metric_col not in plot_df.columns:
+            return
 
-    fig.tight_layout()
-    fig.savefig(main_effects_dir / f"main_effects_{pretty_name}.png", dpi=180)
-    plt.close(fig)
+        y = pd.to_numeric(plot_df[metric_col], errors="coerce").to_numpy()
+        if len(y) == 0 or np.all(~np.isfinite(y)):
+            return
+
+        fig, ax = plt.subplots(figsize=(7.2, 4.8))
+
+        ax.bar(
+            x_pos,
+            y,
+            color=colors,
+            width=0.8,
+            edgecolor="black",
+            linewidth=1.0,
+        )
+
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(labels)
+
+        ax.set_title(title)
+        ax.set_xlabel(xlabel_map.get(pretty_name, pretty_name))
+        ax.set_ylabel(ylabel)
+
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        else:
+            maybe_set_zoomed_yaxis(ax, y)
+
+        ax.yaxis.set_major_locator(MultipleLocator(0.01))
+        ax.yaxis.set_minor_locator(MultipleLocator(0.005))
+
+        ax.grid(axis="y", which="major", alpha=0.35)
+        ax.grid(axis="y", which="minor", alpha=0.15)
+
+        fig.tight_layout()
+        fig.savefig(main_effects_dir / out_name, dpi=180)
+        plt.close(fig)
+
+    draw_bar_chart(
+        metric_col="mean_aulc_norm",
+        title=title_aulc_map.get(pretty_name, f"Wpływ parametru {pretty_name} na przebieg aktywnego uczenia"),
+        ylabel="Średni AULC (znormalizowany) [-]",
+        out_name=f"main_effects_{pretty_name}.png",
+        ylim=ylim_map.get(pretty_name, (0.8, 0.9)),
+    )
+
+    draw_bar_chart(
+        metric_col="mean_final_test_model",
+        title=title_test_map.get(pretty_name, f"Wpływ parametru {pretty_name} na wynik testowy"),
+        ylabel="Średnia z czterech metryk testowych [-]",
+        out_name=f"main_effects_{pretty_name}_test.png",
+        ylim=test_ylim_map.get(pretty_name),
+    )
 
 # run_experiments.py
 STRATEGY_LABELS = {
