@@ -346,6 +346,14 @@ def pairwise_compare_all(
         print(f"⚠️ Pairwise only works for >=2 values of {param_col}, got: {values}")
         return pd.DataFrame(), pd.DataFrame()
 
+    eps = 0.002
+
+    def win_tie_loss_counts(vals: pd.Series) -> tuple[int, int, int]:
+        wins_v1 = int((vals > eps).sum())
+        wins_v2 = int((vals < -eps).sum())
+        ties = int((vals.abs() <= eps).sum())
+        return wins_v1, wins_v2, ties
+
     if use_pct_mode:
         base_cols = ["dataset", "strategy", "seed", "epc"]
         for c in ["init_size_pct", "budget_pct", "batch_pct_of_budget"]:
@@ -438,9 +446,7 @@ def pairwise_compare_all(
         if "delta_aulc_norm" in pw.columns:
             vals = pd.to_numeric(pw["delta_aulc_norm"], errors="coerce").dropna()
             n_metric = len(vals)
-            wins_v1 = int((vals > 0).sum())
-            wins_v2 = int((vals < 0).sum())
-            ties = int((vals == 0).sum())
+            wins_v1, wins_v2, ties = win_tie_loss_counts(vals)
             summary_data.update({
                 "n_pairs_aulc": n_metric,
                 "median_delta_aulc_norm": vals.median() if n_metric else np.nan,
@@ -453,9 +459,7 @@ def pairwise_compare_all(
         if "delta_last_iteration_model" in pw.columns:
             vals = pd.to_numeric(pw["delta_last_iteration_model"], errors="coerce").dropna()
             n_metric = len(vals)
-            wins_v1 = int((vals > 0).sum())
-            wins_v2 = int((vals < 0).sum())
-            ties = int((vals == 0).sum())
+            wins_v1, wins_v2, ties = win_tie_loss_counts(vals)
             summary_data.update({
                 "n_pairs_last_iteration_model": n_metric,
                 "median_delta_last_iteration_model": vals.median() if n_metric else np.nan,
@@ -468,9 +472,7 @@ def pairwise_compare_all(
         if "delta_final_test_model" in pw.columns:
             vals = pd.to_numeric(pw["delta_final_test_model"], errors="coerce").dropna()
             n_metric = len(vals)
-            wins_v1 = int((vals > 0).sum())
-            wins_v2 = int((vals < 0).sum())
-            ties = int((vals == 0).sum())
+            wins_v1, wins_v2, ties = win_tie_loss_counts(vals)
             summary_data.update({
                 "n_pairs_final_test_model": n_metric,
                 "median_delta_final_test_model": vals.median() if n_metric else np.nan,

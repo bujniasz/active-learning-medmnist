@@ -219,6 +219,7 @@ def plot_screening_curves(
 
         x_max = max(x_all)
         start_markers = []
+        end_markers = []
 
         def curve_value_label(value) -> str:
             if isinstance(value, (int, float, np.floating)):
@@ -258,6 +259,10 @@ def plot_screening_curves(
             x_start = int(avg["labeled_count"].min())
             start_markers.append((x_start, f"{val_txt} = {x_start}", line.get_color()))
 
+            x_end = int(avg["labeled_count"].max())
+            if param_col in {"budget", "budget_pct"}:
+                end_markers.append((x_end, f"{val_txt} (+{x_end - x_start})", line.get_color()))
+
         if not isinstance(key, tuple):
             key = (key,)
         key_dict = dict(zip(group_cols, key))
@@ -288,44 +293,94 @@ def plot_screening_curves(
         ax.set_ylabel(ylabel_map.get(metric, metric))
         ax.grid(alpha=0.3)
 
-        y_min, y_top = ax.get_ylim()
-        y_span = y_top - y_min
-        for i, (x_start, label, color) in enumerate(start_markers):
-            y_text = y_top - (0.025 + 0.055 * i) * y_span
-            ax.axvline(
-                x_start,
-                linestyle="--",
-                linewidth=1.5,
-                color=color,
-                alpha=0.9,
-            )
-            ax.text(
-                x_start,
-                y_text,
-                f" {label}",
-                ha="left",
-                va="top",
-                fontsize=9,
-                color="black",
-                bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=1.5),
-            )
+        show_start_markers = param_col in {"init_size", "init_size_pct"}
+        if show_start_markers:
+            y_min, y_top = ax.get_ylim()
+            y_span = y_top - y_min
+            for i, (x_start, label, color) in enumerate(start_markers):
+                y_text = y_top - (0.025 + 0.055 * i) * y_span
+                ax.axvline(
+                    x_start,
+                    linestyle="--",
+                    linewidth=1.5,
+                    color=color,
+                    alpha=0.9,
+                )
+                ax.text(
+                    x_start,
+                    y_text,
+                    f" {label}",
+                    ha="left",
+                    va="top",
+                    fontsize=9,
+                    color="black",
+                    bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=1.5),
+                )
+
+        show_end_markers = param_col in {"budget", "budget_pct"}
+        if show_end_markers:
+            y_min, y_top = ax.get_ylim()
+            y_span = y_top - y_min
+            for i, (x_end, label, color) in enumerate(end_markers):
+                y_text = y_top - 0.35 * y_span
+                is_last_marker = i == len(end_markers) - 1
+                ax.axvline(
+                    x_end,
+                    linestyle=":",
+                    linewidth=1.5,
+                    color=color,
+                    alpha=0.9,
+                )
+                ax.text(
+                    x_end,
+                    y_text,
+                    f"{label} " if is_last_marker else f" {label}",
+                    ha="right" if is_last_marker else "left",
+                    va="top",
+                    fontsize=9,
+                    color="black",
+                    bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=1.5),
+                )
 
         if len(x_all) <= 10:
             xticks = x_all
         else:
             step = max(1, len(x_all) // 8)
             xticks = x_all[::step]
-            for x_start, _, _ in start_markers:
-                if x_start not in xticks:
-                    xticks = [x_start] + xticks
+            if show_start_markers:
+                for x_start, _, _ in start_markers:
+                    if x_start not in xticks:
+                        xticks = [x_start] + xticks
+            if show_end_markers:
+                for x_end, _, _ in end_markers:
+                    if x_end not in xticks:
+                        xticks = xticks + [x_end]
             if x_max not in xticks:
                 xticks = xticks + [x_max]
             xticks = sorted(set(int(x) for x in xticks))
 
+        if show_end_markers:
+            protected = {int(x_end) for x_end, _, _ in end_markers}
+            min_gap = max(1, int(0.04 * (max(x_all) - min(x_all))))
+            filtered_desc: list[int] = []
+
+            for tick in sorted((int(x) for x in xticks), reverse=True):
+                if tick in protected:
+                    filtered_desc.append(tick)
+                    continue
+
+                if all(abs(tick - kept) >= min_gap for kept in filtered_desc):
+                    filtered_desc.append(tick)
+
+            xticks = sorted(filtered_desc)
+
         ax.set_xticks(xticks)
         ax.set_xticklabels([str(int(x)) for x in xticks])
+        for tick in ax.get_xticklabels():
+            tick.set_fontweight("normal")
 
-        ax.legend(framealpha=0.95, loc="best")
+        legend_loc = "upper left" if show_end_markers else "best"
+        ax.legend(framealpha=0.95, loc=legend_loc)
 
         fname_parts = [sanitize_filename_part(v) for v in key]
         fname = "_".join(fname_parts) + f"_compare_{param_col}.png"
@@ -614,7 +669,7 @@ def plot_main_effects(
 
     test_ylim_map = {
         "batch": (0.92, 0.945),
-        "budget": (0.91, 0.95),
+        "budget": (0.908, 0.952),
         "epc": (0.92, 0.945),
         "init_size": (0.925, 0.942),
     }
@@ -678,7 +733,7 @@ def plot_main_effects(
     draw_bar_chart(
         metric_col="mean_final_test_model",
         title=title_test_map.get(pretty_name, f"Wpływ parametru {pretty_name} na wynik testowy"),
-        ylabel="Średnia z czterech metryk testowych [-]",
+        ylabel="Średnia metryka testowa [-]",
         out_name=f"main_effects_{pretty_name}_test.png",
         ylim=test_ylim_map.get(pretty_name),
     )
