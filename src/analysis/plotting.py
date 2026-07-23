@@ -220,6 +220,7 @@ def plot_screening_curves(
         x_max = max(x_all)
         start_markers = []
         end_markers = []
+        batch_step_markers = []
 
         def curve_value_label(value) -> str:
             if isinstance(value, (int, float, np.floating)):
@@ -262,6 +263,15 @@ def plot_screening_curves(
             x_end = int(avg["labeled_count"].max())
             if param_col in {"budget", "budget_pct"}:
                 end_markers.append((x_end, f"{val_txt} (+{x_end - x_start})", line.get_color()))
+
+            if param_col in {"batch", "batch_pct_of_budget"}:
+                xs = [int(x) for x in avg["labeled_count"].tolist()]
+                first_after_start = next((x for x in xs if x > x_start), None)
+                if first_after_start is not None:
+                    batch_abs = first_after_start - x_start
+                    batch_step_markers.append(
+                        (x_start, first_after_start, f"+{val_txt} (+{batch_abs})", line.get_color())
+                    )
 
         if not isinstance(key, tuple):
             key = (key,)
@@ -359,8 +369,77 @@ def plot_screening_curves(
                 xticks = xticks + [x_max]
             xticks = sorted(set(int(x) for x in xticks))
 
-        if show_end_markers:
+        show_batch_markers = param_col in {"batch", "batch_pct_of_budget"}
+        if show_batch_markers and batch_step_markers:
+            y_min, y_top = ax.get_ylim()
+            y_span = y_top - y_min
+            common_start = min(x_start for x_start, _, _, _ in batch_step_markers)
+            marker_levels = [
+                y_top - 0.16 * y_span,
+                y_min + 0.18 * y_span,
+                y_min + 0.27 * y_span,
+            ]
+            text_offsets = [
+                0.015 * y_span,
+                -0.035 * y_span,
+                -0.035 * y_span,
+            ]
+
+            ax.axvline(
+                common_start,
+                linestyle="--",
+                linewidth=1.5,
+                color="black",
+                alpha=0.85,
+            )
+            ax.text(
+                common_start,
+                y_top - 0.035 * y_span,
+                f"start = {common_start}",
+                ha="left",
+                va="top",
+                fontsize=9,
+                color="black",
+                bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=1.5),
+            )
+
+            for i, (x_start, x_step, label, color) in enumerate(batch_step_markers):
+                ax.axvline(
+                    x_step,
+                    linestyle=":",
+                    linewidth=1.5,
+                    color=color,
+                    alpha=0.9,
+                )
+
+                local_y = marker_levels[min(i, len(marker_levels) - 1)]
+                ax.annotate(
+                    "",
+                    xy=(x_step, local_y),
+                    xytext=(x_start, local_y),
+                    arrowprops=dict(
+                        arrowstyle="<->",
+                        color=color,
+                        linewidth=1.2,
+                        shrinkA=0,
+                        shrinkB=0,
+                    ),
+                )
+                ax.text(
+                    x_step,
+                    local_y + text_offsets[min(i, len(text_offsets) - 1)],
+                    f" {label}",
+                    ha="left",
+                    va="bottom" if i == 0 else "top",
+                    fontsize=9,
+                    color="black",
+                    bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=1.5),
+                )
+
+        if show_end_markers or show_batch_markers:
             protected = {int(x_end) for x_end, _, _ in end_markers}
+            if show_batch_markers:
+                protected.update(int(x_start) for x_start, _, _, _ in batch_step_markers)
             min_gap = max(1, int(0.04 * (max(x_all) - min(x_all))))
             filtered_desc: list[int] = []
 
@@ -642,7 +721,7 @@ def plot_main_effects(
     xlabel_map = {
         "batch": "Rozmiar wsadu anotacyjnego [% budżetu]",
         "budget": "Budżet anotacji [% zbioru treningowego]",
-        "epc": "Liczba epok na cykl",
+        "epc": "Liczba epok na cykl [-]",
         "init_size": "Rozmiar zbioru początkowego [% zbioru treningowego]",
     }
 

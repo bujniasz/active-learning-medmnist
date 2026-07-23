@@ -1,8 +1,8 @@
 no_run: true
 overwrite_results: false
 
-results_csv: results/existing.csv
-out_dir: results/new-plots
+results_csv: results/active_best-2.csv
+out_dir: results/example-plots
 
 data_dirs: null
 seeds: null

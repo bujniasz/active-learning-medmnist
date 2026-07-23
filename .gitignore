@@ -23,6 +23,8 @@
 
 !/results/readme.md
 !/results/final_*.csv
+!/results/example-plots/
+/results/active_screening_final/
 
 *.sh
 
