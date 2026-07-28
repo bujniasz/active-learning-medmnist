@@ -16,7 +16,8 @@ Projekt obejmuje:
 - zapis wyników do CSV;
 - zapis checkpointów modeli;
 - zapis asklogów, czyli list próbek wybranych w cyklach Active Learning;
-- analizę wyników screeningu i generowanie wykresów.
+- analizę wyników klasycznego uczenia nadzorowanego;
+- analizę wyników screeningu Active Learning i generowanie wykresów.
 
 ## Dane
 
@@ -119,7 +120,13 @@ python3 -m src.run_experiments -c configs/run_experiments/supervised/default.yam
 Analiza wyników screeningu Active Learning:
 
 ```bash
-python3 -m src.analysis.analyze_active_screening -c configs/analyze_active_screening/default.yaml
+python3 -m src.analysis.analyze_active_screening -c configs/analysis/analyze_active_screening/default.yaml
+```
+
+Analiza wyników supervised:
+
+```bash
+python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervised/default.yaml
 ```
 
 ## Typowy Flow Pracy
@@ -131,7 +138,7 @@ python3 -m src.analysis.analyze_active_screening -c configs/analyze_active_scree
 5. Uruchom pojedynczy trening albo sweep przez `src.run_experiments`.
 6. Sprawdź wyniki w `results/`.
 7. Dla Active Learning sprawdź dodatkowo checkpointy w `models/` i asklogi w `logs/`.
-8. W razie potrzeby uruchom analizę screeningu lub generowanie wykresów.
+8. W razie potrzeby uruchom analizę wyników supervised, analizę screeningu lub generowanie wykresów.
 
 ## Struktura Repozytorium
 
@@ -189,6 +196,7 @@ Więcej: `src/readme.md`.
 - `src/training/train_supervised.py` - trening i ewaluacja modelu supervised.
 - `src/training/train_active.py` - pojedynczy eksperyment Active Learning.
 - `src/run_experiments.py` - uruchamianie większych siatek eksperymentów.
+- `src/analysis/analyze_supervised.py` - analiza wyników supervised.
 - `src/analysis/analyze_active_screening.py` - analiza screeningu Active Learning.
 - `src/analysis/plotting.py` - funkcje do generowania wykresów.
 - `src/utils/load_data.py` - ładowanie i przygotowanie danych.
@@ -210,6 +218,10 @@ Ich rola:
 - `final_supervised.csv` - baseline supervised dla finalnych datasetów;
 - `final_active_screening.csv` - screening parametrów Active Learning na `bloodmnist`;
 - `final_active_best.csv` - finalne porównanie strategii Active Learning na wybranym zestawie parametrów.
+
+Dodatkowe skrypty analityczne mogą generować pochodne podsumowania i wykresy,
+na przykład podsumowanie metryk testowych supervised oraz zagregowane macierze
+pomyłek.
 
 ## Uwagi Reprodukcyjne
 

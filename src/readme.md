@@ -19,6 +19,7 @@ src/
     train_supervised.py
   analysis/
     analyze_active_screening.py
+    analyze_supervised.py
     plotting.py
   utils/
     labels_mapping.py
@@ -76,12 +77,25 @@ It reads an AL results CSV, summarizes runs, computes AULC-based comparisons, pr
 Typical usage:
 
 ```bash
-python3 -m src.analysis.analyze_active_screening -c configs/analyze_active_screening/default.yaml
+python3 -m src.analysis.analyze_active_screening -c configs/analysis/analyze_active_screening/default.yaml
+```
+
+### `analysis/analyze_supervised.py`
+
+Post-processing script for supervised learning experiments.
+
+It reads final supervised results, computes mean and standard deviation of test
+metrics for each dataset and creates aggregated confusion matrices.
+
+Typical usage:
+
+```bash
+python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervised/default.yaml
 ```
 
 ### `analysis/plotting.py`
 
-Shared plotting utilities used by `run_experiments.py` and `analyze_active_screening.py`.
+Shared plotting utilities used by `run_experiments.py`, `analyze_active_screening.py` and `analyze_supervised.py`.
 
 It contains functions for strategy comparison curves, screening curves, main-effect plots, pairwise delta plots and helper utilities for labels, colors and axis formatting.
 

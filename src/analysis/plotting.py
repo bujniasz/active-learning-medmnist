@@ -817,6 +817,74 @@ def plot_main_effects(
         ylim=test_ylim_map.get(pretty_name),
     )
 
+def plot_supervised_confusion_matrices(
+    confusion_df: pd.DataFrame,
+    out_dir: Path,
+) -> None:
+    if len(confusion_df) == 0:
+        return
+
+    required_cols = ["dataset", "tn", "fp", "fn", "tp"]
+    missing = [c for c in required_cols if c not in confusion_df.columns]
+    if missing:
+        raise ValueError(f"Missing required confusion matrix columns: {missing}")
+
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    df = confusion_df.copy()
+    df["dataset"] = df["dataset"].astype(str)
+    df = df.sort_values("dataset").reset_index(drop=True)
+
+    dataset_label_map = {
+        "octmnist": "OCTMNIST",
+        "pathmnist": "PathMNIST",
+        "pneumoniamnist": "PneumoniaMNIST",
+    }
+
+    for row in df.to_dict(orient="records"):
+        matrix = np.array(
+            [
+                [int(row["tn"]), int(row["fp"])],
+                [int(row["fn"]), int(row["tp"])],
+            ]
+        )
+
+        fig, ax = plt.subplots(figsize=(4.2, 3.8))
+        max_count = float(matrix.max())
+        im = ax.imshow(matrix, cmap="Blues", vmin=0, vmax=max_count)
+
+        dataset = str(row["dataset"])
+        ax.set_title(dataset_label_map.get(dataset, dataset))
+        ax.set_xlabel("Klasa przewidziana")
+        ax.set_ylabel("Klasa rzeczywista")
+        ax.set_xticks([0, 1])
+        ax.set_yticks([0, 1])
+        ax.set_xticklabels(["0", "1"])
+        ax.set_yticklabels(["0", "1"])
+
+        threshold = max_count / 2.0
+        for i in range(2):
+            for j in range(2):
+                value = matrix[i, j]
+                ax.text(
+                    j,
+                    i,
+                    str(value),
+                    ha="center",
+                    va="center",
+                    color="white" if value > threshold else "black",
+                    fontsize=11,
+                )
+
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.tight_layout()
+        fig.savefig(plots_dir / f"confusion_matrix_{dataset}.png", dpi=180)
+        plt.close(fig)
+
 # run_experiments.py
 STRATEGY_LABELS = {
     "random": "Random",
