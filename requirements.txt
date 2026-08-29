@@ -12,5 +12,4 @@ git+https://github.com/ntucllab/libact.git
 torch
 torchvision
 medmnist
-tqdm
 pyyaml

@@ -2,7 +2,7 @@
 # Config for: src/analysis/analyze_active_screening.py
 #
 # Run with:
-#   python3 -m src.analysis.analyze_active_screening -c configs/analyze_active_screening/default.yaml
+#   python3 -m src.analysis.analyze_active_screening -c configs/analysis/analyze_active_screening/default.yaml
 #
 # This script analyzes results from Active Learning experiments
 # and generates summary statistics / tables based on the CSV file.
@@ -14,11 +14,11 @@
 # === Input ===
 # Path to CSV file with experiment results.
 # This file should contain results from multiple AL runs.
-results_csv: results/screening_official_final.csv
+results_csv: results/final_active_screening.csv
 
 # === Output ===
 # Directory where analysis results (tables, summaries) will be saved.
-out_dir: results/screening-0805
+out_dir: results/active_screening_final
 
 # === Metric ===
 # Metric used to compare and rank experiments.

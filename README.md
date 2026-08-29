@@ -16,7 +16,8 @@ The project includes:
 - CSV metric logging;
 - model checkpoint saving;
 - asklog saving, i.e. storing the sample IDs selected during Active Learning cycles;
-- screening analysis and plot generation.
+- supervised result analysis;
+- Active Learning screening and strategy-comparison analysis.
 
 ## Data
 
@@ -119,7 +120,19 @@ python3 -m src.run_experiments -c configs/run_experiments/supervised/default.yam
 Active Learning screening analysis:
 
 ```bash
-python3 -m src.analysis.analyze_active_screening -c configs/analyze_active_screening/default.yaml
+python3 -m src.analysis.analyze_active_screening -c configs/analysis/analyze_active_screening/default.yaml
+```
+
+Supervised result analysis:
+
+```bash
+python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervised/default.yaml
+```
+
+Active Learning strategy-comparison analysis:
+
+```bash
+python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
 ```
 
 ## Typical Workflow
@@ -131,7 +144,7 @@ python3 -m src.analysis.analyze_active_screening -c configs/analyze_active_scree
 5. Run a single training job or an experiment sweep through `src.run_experiments`.
 6. Check experiment results in `results/`.
 7. For Active Learning, also inspect checkpoints in `models/` and asklogs in `logs/`.
-8. If needed, run screening analysis or plot generation.
+8. If needed, run supervised, screening or strategy-comparison analysis.
 
 ## Repository Structure
 
@@ -190,7 +203,9 @@ See: `src/readme.md`.
 - `src/training/train_supervised.py` - supervised model training and evaluation.
 - `src/training/train_active.py` - single Active Learning experiment.
 - `src/run_experiments.py` - larger experiment sweep launcher.
+- `src/analysis/analyze_supervised.py` - supervised result analysis.
 - `src/analysis/analyze_active_screening.py` - Active Learning screening analysis.
+- `src/analysis/analyze_active_strategies.py` - final Active Learning strategy-comparison analysis.
 - `src/analysis/plotting.py` - plot generation utilities.
 - `src/utils/load_data.py` - data loading and preparation.
 - `src/utils/labels_mapping.py` - label mapping for binary tasks.
@@ -211,6 +226,10 @@ Their roles:
 - `final_supervised.csv` - supervised baseline for the final datasets;
 - `final_active_screening.csv` - Active Learning parameter screening on `bloodmnist`;
 - `final_active_best.csv` - final Active Learning strategy comparison using the selected parameter setup.
+
+Additional analysis scripts can generate derived summaries and plots, for example
+supervised test metric summaries, Active Learning screening summaries, strategy
+rankings and aggregated confusion matrices.
 
 ## Reproducibility Notes
 
