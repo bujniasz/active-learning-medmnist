@@ -33,9 +33,6 @@ python: python3
 
 train_script: src/training/train_active.py
 
-# If true: skip training and only generate plots from existing CSV.
-no_run: false
-
 # IMPORTANT:
 # Set to true only if you want to delete existing results before running.
 overwrite_results: false
@@ -60,8 +57,6 @@ seeds:
   - 148932
 
 # === Strategies ===
-# Limited to 6 strategies for plot readability.
-#
 # Selected to cover:
 #   - passive/random baseline
 #   - classic uncertainty sampling
@@ -100,7 +95,3 @@ budgets: null
 # === Training ===
 epochs_per_cycles:
   - 5
-
-# === Plot filters ===
-# Set to null to include all datasets.
-datasets: null

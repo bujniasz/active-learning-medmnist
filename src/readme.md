@@ -19,6 +19,7 @@ src/
     train_supervised.py
   analysis/
     analyze_active_screening.py
+    analyze_active_strategies.py
     analyze_supervised.py
     plotting.py
   utils/
@@ -33,7 +34,7 @@ src/
 
 Experiment launcher for larger sweeps.
 
-In Active Learning mode, it runs `training/train_active.py` for combinations of datasets, strategies, seeds and AL hyperparameters. After the runs finish, it reads the shared CSV file and generates validation plots.
+In Active Learning mode, it runs `training/train_active.py` for combinations of datasets, strategies, seeds and AL hyperparameters, appending results to a shared CSV file.
 
 In supervised mode, it runs `training/train_supervised.py` for selected datasets and seeds, saving all results to one CSV file.
 
@@ -93,11 +94,23 @@ Typical usage:
 python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervised/default.yaml
 ```
 
+### `analysis/analyze_active_strategies.py`
+
+Post-processing script for the final Active Learning strategy comparison.
+
+It reads final Active Learning results, computes validation AULC summaries, supervised validation baselines, time-to-baseline tables, final test summaries, strategy rankings, overall rankings and aggregated confusion matrices. It also generates validation metric plots, train-loss plots and per-strategy confusion matrix figures.
+
+Typical usage:
+
+```bash
+python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
+```
+
 ### `analysis/plotting.py`
 
-Shared plotting utilities used by `run_experiments.py`, `analyze_active_screening.py` and `analyze_supervised.py`.
+Shared plotting utilities used by the analysis scripts.
 
-It contains functions for strategy comparison curves, screening curves, main-effect plots, pairwise delta plots and helper utilities for labels, colors and axis formatting.
+It contains functions for screening curves, main-effect plots, pairwise delta plots, supervised and Active Learning confusion matrices, validation curves, train-loss curves and helper utilities for labels, colors and axis formatting.
 
 ## Utilities
 

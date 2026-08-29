@@ -18,34 +18,6 @@
 # This gives:
 #   2 seeds x 2 strategies x 2 epc values = 8 experiments
 #
-# =============================================================================
-# IMPORTANT: no_run behavior
-#
-# no_run: false
-#   - run new Active Learning experiments according to the grid below,
-#   - append validation/test results to results_csv,
-#   - then generate validation plots from results_csv.
-#
-# no_run: true
-#   - skip training completely,
-#   - use an existing results_csv as input,
-#   - generate plots only.
-#
-# When no_run: true, fields such as:
-#   - datasets
-#   - strategies
-#   - seeds
-#   - init_size_pcts / init_sizes
-#   - batch_pcts_of_budget / batches
-#   - budget_pcts / budgets
-#   - epochs_per_cycles
-#
-# are used as optional PLOT FILTERS.
-#
-# If no_run: true and you want to plot everything available in the CSV,
-# set these filter fields to null (as demonstared in replotting-example.yaml).
-# =============================================================================
-
 # === Mode ===
 # Must be "active" for Active Learning experiments.
 mode: active
@@ -57,38 +29,16 @@ python: python3
 # Path to train_active.py script.
 train_script: src/training/train_active.py
 
-# If false:
-#   run experiments and then plot results.
-#
-# If true:
-#   skip training and only plot from an existing results_csv.
-no_run: false
-
 # If true:
 #   delete results_csv before running new experiments.
-#
-# WARNING:
-# Use only with no_run: false.
-# Do NOT use overwrite_results: true together with no_run: true,
-# because no_run: true expects results_csv to already exist.
 overwrite_results: false
 
 # === Output ===
 # Path to the experiment CSV file.
-#
-# Behavior depends on no_run:
-#   - no_run: false
-#       results from newly executed experiments will be appended to this CSV.
-#
-#   - no_run: true
-#       this CSV must already exist and will be used as input for plotting
-#       without running new experiments.
-#
-# Plot output directory is derived automatically by removing the CSV suffix.
+# Results from newly executed experiments will be appended to this CSV.
 #
 # Example:
 #   results_csv: results/my-experiment/name.csv
-#   plots will be saved in: results/my-experiment/name/
 #
 # Model checkpoints are saved automatically under:
 #   models/<results_csv_without_results_prefix_and_suffix>/<dataset>/
@@ -100,28 +50,16 @@ overwrite_results: false
 #   models/my-experiment/new/bloodmnist/...
 #   models/my-experiment/new/pneumoniamnist/...
 #
-# Plot directory:
-#   results/my-experiment/new/
-results_csv: results/run-active/2705-pt2.csv
+results_csv: results/run-woplots/2705-pt2.csv
 
 # =============================================================================
-# Experiment grid / plot filters
+# Experiment grid
 #
-# When no_run: false:
-#   fields below define the experiment grid.
-#
-# When no_run: true:
-#   fields below are optional filters applied to the existing CSV.
-#   Set them to null to plot all available rows.
+# Fields below define the experiment grid. All combinations are executed.
 # =============================================================================
 
 # === Data ===
 # List of dataset directories used for running experiments.
-#
-# When no_run: true:
-#   this field is not used directly for plotting.
-#   Use datasets below if you want to filter plots by dataset name.
-#
 # Example:
 #   data_dirs:
 #     - data/bloodmnist
@@ -132,26 +70,14 @@ data_dirs:
 
 # === Reproducibility ===
 # List of random seeds.
-#
-# When no_run: false:
-#   each seed defines one independent run.
-#
-# When no_run: true:
-#   if not null, only rows with these seeds will be plotted.
-#   Set to null to include all seeds from results_csv.
+# Each seed defines one independent run.
 seeds:
-  - 3333
+  - 33333
 
 
 # === Strategies ===
 # List of Active Learning query strategies.
-#
-# When no_run: false:
-#   each strategy defines one part of the experiment grid.
-#
-# When no_run: true:
-#   if not null, only rows with these strategies will be plotted.
-#   Set to null to include all strategies from results_csv.
+# Each strategy defines one part of the experiment grid.
 #
 # Available:
 #   random
@@ -177,19 +103,11 @@ strategies:
 #   absolute
 #     use absolute integer fields below
 #
-# When no_run: true:
-#   this still controls which parameter fields are interpreted as plot filters.
 al_mode: percent
 
 # === Percent mode ===
 # Used when al_mode: percent.
-#
-# When no_run: false:
-#   these lists are combined into the experiment grid.
-#
-# When no_run: true:
-#   if not null, these values filter rows from results_csv.
-#   Set to null to include all values.
+# These lists are combined into the experiment grid.
 #
 # init_size_pcts:
 #   initial labeled set size as % of train set.
@@ -210,13 +128,7 @@ budget_pcts:
 
 # === Absolute mode ===
 # Used when al_mode: absolute.
-#
-# When no_run: false:
-#   these lists are combined into the experiment grid.
-#
-# When no_run: true:
-#   if not null, these values filter rows from results_csv.
-#   Set to null to include all values.
+# These lists are combined into the experiment grid.
 #
 # init_sizes:
 #   initial labeled set size as number of samples.
@@ -232,27 +144,6 @@ budgets: null
 
 # === Training ===
 # Number of training epochs after each Active Learning query cycle.
-#
-# When no_run: false:
-#   each value defines one part of the experiment grid.
-#
-# When no_run: true:
-#   if not null, only rows with these epc values will be plotted.
-#   Set to null to include all epc values from results_csv.
+# Each value defines one part of the experiment grid.
 epochs_per_cycles:
   - 3
-
-
-# === Plot filters ===
-# Optional dataset-name filter used only when plotting.
-#
-# This is different from data_dirs:
-#   - data_dirs are paths used for running experiments,
-#   - datasets are names stored in the CSV, e.g. bloodmnist, octmnist.
-#
-# Example:
-#   datasets:
-#     - bloodmnist
-#
-# Set to null to include all datasets from results_csv.
-datasets: null

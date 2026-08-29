@@ -17,7 +17,7 @@ The project includes:
 - model checkpoint saving;
 - asklog saving, i.e. storing the sample IDs selected during Active Learning cycles;
 - supervised result analysis;
-- Active Learning screening analysis and plot generation.
+- Active Learning screening and strategy-comparison analysis.
 
 ## Data
 
@@ -129,6 +129,12 @@ Supervised result analysis:
 python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervised/default.yaml
 ```
 
+Active Learning strategy-comparison analysis:
+
+```bash
+python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
+```
+
 ## Typical Workflow
 
 1. Activate the `venv` environment.
@@ -138,7 +144,7 @@ python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervise
 5. Run a single training job or an experiment sweep through `src.run_experiments`.
 6. Check experiment results in `results/`.
 7. For Active Learning, also inspect checkpoints in `models/` and asklogs in `logs/`.
-8. If needed, run supervised result analysis, screening analysis or plot generation.
+8. If needed, run supervised, screening or strategy-comparison analysis.
 
 ## Repository Structure
 
@@ -199,6 +205,7 @@ See: `src/readme.md`.
 - `src/run_experiments.py` - larger experiment sweep launcher.
 - `src/analysis/analyze_supervised.py` - supervised result analysis.
 - `src/analysis/analyze_active_screening.py` - Active Learning screening analysis.
+- `src/analysis/analyze_active_strategies.py` - final Active Learning strategy-comparison analysis.
 - `src/analysis/plotting.py` - plot generation utilities.
 - `src/utils/load_data.py` - data loading and preparation.
 - `src/utils/labels_mapping.py` - label mapping for binary tasks.
@@ -221,7 +228,8 @@ Their roles:
 - `final_active_best.csv` - final Active Learning strategy comparison using the selected parameter setup.
 
 Additional analysis scripts can generate derived summaries and plots, for example
-supervised test metric summaries and aggregated confusion matrices.
+supervised test metric summaries, Active Learning screening summaries, strategy
+rankings and aggregated confusion matrices.
 
 ## Reproducibility Notes
 

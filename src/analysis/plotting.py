@@ -887,16 +887,16 @@ def plot_supervised_confusion_matrices(
 
 # run_experiments.py
 STRATEGY_LABELS = {
-    "random": "Random",
+    "random": "Random Sampling",
     "least_confident": "Least confident",
     "margin": "Margin Sampling",
-    "entropy": "Entropy",
+    "entropy": "Entropy Sampling",
     "mc_entropy": "MC Entropy",
-    "mc_bald": "BALD",
-    "entropy_diverse": "Entropy + Diversity",
-    "mc_entropy_diverse": "MC Entropy + Diversity",
-    "mc_bald_diverse": "BALD + Diversity",
-    "egl_fc": "EGL",
+    "mc_bald": "MC BALD",
+    "entropy_diverse": "Entropy Sampling Diverse",
+    "mc_entropy_diverse": "MC Entropy Diverse",
+    "mc_bald_diverse": "MC BALD Diverse",
+    "egl_fc": "Expected Gradient Length",
 }
 
 def make_color_map(strategies: list[str]) -> dict[str, str]:
@@ -1011,3 +1011,268 @@ def plot_al_metric_by_strategy(
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
+
+
+# analyze_active_strategies.py
+DATASET_LABELS = {
+    "octmnist": "OCTMNIST",
+    "pathmnist": "PathMNIST",
+    "pneumoniamnist": "PneumoniaMNIST",
+    "bloodmnist": "BloodMNIST",
+}
+
+METRIC_LABELS = {
+    "acc": "Accuracy [-]",
+    "f1_macro": "$F_1$ macro [-]",
+    "auc": "ROC AUC [-]",
+    "ap": "Average Precision [-]",
+    "train_loss": "Strata treningowa [-]",
+}
+
+METRIC_TITLES = {
+    "acc": "Accuracy",
+    "f1_macro": "$F_1$ macro",
+    "auc": "ROC AUC",
+    "ap": "Average Precision",
+}
+
+
+def _mean_std_by_labeled_count(df: pd.DataFrame, metric: str) -> pd.DataFrame:
+    tmp = df.copy()
+    tmp[metric] = pd.to_numeric(tmp[metric], errors="coerce")
+    tmp["labeled_count"] = pd.to_numeric(tmp["labeled_count"], errors="coerce")
+    tmp = tmp.dropna(subset=["labeled_count", metric])
+
+    return (
+        tmp.groupby("labeled_count", as_index=False)
+        .agg(mean=(metric, "mean"), std=(metric, "std"))
+        .sort_values("labeled_count")
+    )
+
+
+def _as_float(value) -> float:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return float("nan")
+    return float(numeric)
+
+
+def _set_endpoint_xticks(ax, x_values) -> None:
+    vals = pd.to_numeric(pd.Series(x_values), errors="coerce").dropna()
+    if len(vals) == 0:
+        return
+
+    x_min = int(vals.min())
+    x_max = int(vals.max())
+
+    ax.figure.canvas.draw()
+    ticks = [
+        int(round(float(tick)))
+        for tick in ax.get_xticks()
+        if np.isfinite(tick) and x_min < float(tick) < x_max
+    ]
+    ticks = sorted(set([x_min, *ticks, x_max]))
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([str(tick) for tick in ticks])
+
+
+def plot_active_strategy_validation_metric(
+    df_val: pd.DataFrame,
+    dataset: str,
+    metric: str,
+    out_path: Path,
+    color_map: dict[str, str],
+    baseline: float | None = None,
+    best_labeled_count_by_strategy: dict[str, int] | None = None,
+) -> None:
+    if len(df_val) == 0:
+        return
+
+    fig, ax = plt.subplots(figsize=(11.6, 5.8))
+
+    for strategy, g in df_val.groupby("strategy", sort=True):
+        strategy = str(strategy)
+        curve = _mean_std_by_labeled_count(g, metric)
+        if len(curve) == 0:
+            continue
+
+        x = curve["labeled_count"].to_numpy()
+        y = curve["mean"].to_numpy()
+        color = color_map.get(strategy)
+
+        (line,) = ax.plot(
+            x,
+            y,
+            linewidth=1.9,
+            label=STRATEGY_LABELS.get(strategy, strategy),
+            color=color,
+        )
+
+        if best_labeled_count_by_strategy:
+            best_x = best_labeled_count_by_strategy.get(strategy)
+            if best_x is not None:
+                best_rows = curve[curve["labeled_count"] == best_x]
+                if len(best_rows) > 0:
+                    best_y = _as_float(best_rows.iloc[0]["mean"])
+                    ax.plot(
+                        [best_x],
+                        [best_y],
+                        marker="x",
+                        markersize=8.5,
+                        mew=2.0,
+                        linestyle="None",
+                        color=line.get_color(),
+                    )
+
+    if baseline is not None and np.isfinite(baseline):
+        baseline = float(baseline)
+        ax.axhline(
+            baseline,
+            linestyle="--",
+            linewidth=1.35,
+            color="black",
+            alpha=0.8,
+        )
+        ax.annotate(
+            f"Supervised = {baseline:.4f}",
+            xy=(0.01, baseline),
+            xycoords=ax.get_yaxis_transform(),
+            xytext=(0, -5),
+            textcoords="offset points",
+            ha="left",
+            va="top",
+            fontsize=9.5,
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.8, "pad": 1.5},
+        )
+
+    dataset_label = DATASET_LABELS.get(str(dataset), str(dataset))
+    ax.set_title(
+        f"{dataset_label}: przebieg metryki walidacyjnej "
+        f"{METRIC_TITLES.get(metric, metric)}"
+    )
+    ax.set_xlabel("Liczba oznaczonych próbek [-]")
+    ax.set_ylabel("Wartość metryki [-]")
+    ax.grid(True, alpha=0.25)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
+    _set_endpoint_xticks(ax, df_val["labeled_count"])
+    ax.legend(loc="lower right", framealpha=0.95)
+
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def plot_active_strategy_train_loss(
+    df_val: pd.DataFrame,
+    dataset: str,
+    out_path: Path,
+    color_map: dict[str, str],
+) -> None:
+    if len(df_val) == 0 or "train_loss" not in df_val.columns:
+        return
+
+    fig, ax = plt.subplots(figsize=(10.5, 5.4))
+
+    for strategy, g in df_val.groupby("strategy", sort=True):
+        strategy = str(strategy)
+        curve = _mean_std_by_labeled_count(g, "train_loss")
+        if len(curve) == 0:
+            continue
+
+        x = curve["labeled_count"].to_numpy()
+        y = curve["mean"].to_numpy()
+        color = color_map.get(strategy)
+
+        ax.plot(
+            x,
+            y,
+            linewidth=1.9,
+            label=STRATEGY_LABELS.get(strategy, strategy),
+            color=color,
+        )
+
+    dataset_label = DATASET_LABELS.get(str(dataset), str(dataset))
+    ax.set_title(f"{dataset_label}: przebieg straty treningowej")
+    ax.set_xlabel("Liczba oznaczonych próbek [-]")
+    ax.set_ylabel(METRIC_LABELS["train_loss"])
+    ax.grid(True, alpha=0.25)
+    _set_endpoint_xticks(ax, df_val["labeled_count"])
+    ax.legend(loc="upper right", framealpha=0.95)
+
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+
+
+def plot_active_strategy_confusion_matrices(
+    confusion_df: pd.DataFrame,
+    out_dir: Path,
+) -> None:
+    if len(confusion_df) == 0:
+        return
+
+    required_cols = ["dataset", "strategy", "tn", "fp", "fn", "tp"]
+    missing = [c for c in required_cols if c not in confusion_df.columns]
+    if missing:
+        raise ValueError(f"Missing required confusion matrix columns: {missing}")
+
+    plots_dir = out_dir / "plots" / "confusion_matrices"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    df = confusion_df.copy()
+    df["dataset"] = df["dataset"].astype(str)
+    df["strategy"] = df["strategy"].astype(str)
+    df = df.sort_values(["dataset", "strategy"]).reset_index(drop=True)
+
+    for row in df.to_dict(orient="records"):
+        matrix = np.array(
+            [
+                [int(row["tn"]), int(row["fp"])],
+                [int(row["fn"]), int(row["tp"])],
+            ]
+        )
+
+        fig, ax = plt.subplots(figsize=(4.2, 3.8))
+        max_count = float(matrix.max())
+        im = ax.imshow(matrix, cmap="Blues", vmin=0, vmax=max_count)
+
+        dataset = str(row["dataset"])
+        strategy = str(row["strategy"])
+        title = (
+            f"{DATASET_LABELS.get(dataset, dataset)}\n"
+            f"Strategia: {STRATEGY_LABELS.get(strategy, strategy)}"
+        )
+        ax.set_title(title)
+        ax.set_xlabel("Klasa przewidziana")
+        ax.set_ylabel("Klasa rzeczywista")
+        ax.set_xticks([0, 1])
+        ax.set_yticks([0, 1])
+        ax.set_xticklabels(["0", "1"])
+        ax.set_yticklabels(["0", "1"])
+
+        threshold = max_count / 2.0
+        for i in range(2):
+            for j in range(2):
+                value = matrix[i, j]
+                ax.text(
+                    j,
+                    i,
+                    str(value),
+                    ha="center",
+                    va="center",
+                    color="white" if value > threshold else "black",
+                    fontsize=11,
+                )
+
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.tight_layout()
+
+        dataset_part = sanitize_filename_part(dataset)
+        strategy_part = sanitize_filename_part(strategy)
+        fig.savefig(plots_dir / f"confusion_matrix_{dataset_part}_{strategy_part}.png", dpi=180)
+        plt.close(fig)

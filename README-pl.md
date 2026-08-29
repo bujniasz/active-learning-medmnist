@@ -17,7 +17,7 @@ Projekt obejmuje:
 - zapis checkpointów modeli;
 - zapis asklogów, czyli list próbek wybranych w cyklach Active Learning;
 - analizę wyników klasycznego uczenia nadzorowanego;
-- analizę wyników screeningu Active Learning i generowanie wykresów.
+- analizę wyników screeningu oraz finalnego porównania strategii Active Learning.
 
 ## Dane
 
@@ -129,6 +129,12 @@ Analiza wyników supervised:
 python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervised/default.yaml
 ```
 
+Analiza finalnego porównania strategii Active Learning:
+
+```bash
+python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
+```
+
 ## Typowy Flow Pracy
 
 1. Aktywuj środowisko `venv`.
@@ -138,7 +144,7 @@ python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervise
 5. Uruchom pojedynczy trening albo sweep przez `src.run_experiments`.
 6. Sprawdź wyniki w `results/`.
 7. Dla Active Learning sprawdź dodatkowo checkpointy w `models/` i asklogi w `logs/`.
-8. W razie potrzeby uruchom analizę wyników supervised, analizę screeningu lub generowanie wykresów.
+8. W razie potrzeby uruchom analizę wyników supervised, screeningu lub finalnego porównania strategii.
 
 ## Struktura Repozytorium
 
@@ -198,6 +204,7 @@ Więcej: `src/readme.md`.
 - `src/run_experiments.py` - uruchamianie większych siatek eksperymentów.
 - `src/analysis/analyze_supervised.py` - analiza wyników supervised.
 - `src/analysis/analyze_active_screening.py` - analiza screeningu Active Learning.
+- `src/analysis/analyze_active_strategies.py` - analiza finalnego porównania strategii Active Learning.
 - `src/analysis/plotting.py` - funkcje do generowania wykresów.
 - `src/utils/load_data.py` - ładowanie i przygotowanie danych.
 - `src/utils/labels_mapping.py` - mapowanie etykiet do zadań binarnych.
@@ -220,8 +227,8 @@ Ich rola:
 - `final_active_best.csv` - finalne porównanie strategii Active Learning na wybranym zestawie parametrów.
 
 Dodatkowe skrypty analityczne mogą generować pochodne podsumowania i wykresy,
-na przykład podsumowanie metryk testowych supervised oraz zagregowane macierze
-pomyłek.
+na przykład podsumowanie metryk testowych supervised, podsumowania screeningu,
+rankingi strategii oraz zagregowane macierze pomyłek.
 
 ## Uwagi Reprodukcyjne
 
