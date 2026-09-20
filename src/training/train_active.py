@@ -6,6 +6,7 @@ import argparse
 import random
 from pathlib import Path
 import json
+from typing import Any
 
 # Torch
 import torch
@@ -90,6 +91,16 @@ def build_batch_schedule_from_budget(budget: int, n_cycles: int) -> list[int]:
 def _pct_to_count(pct: float, total: int) -> int:
     return max(1, int(round(total * float(pct) / 100.0)))
 
+def _required_int(value: Any, name: str) -> int:
+    if value is None:
+        raise ValueError(f"{name} is required")
+    return int(value)
+
+def _required_float(value: Any, name: str) -> float:
+    if value is None:
+        raise ValueError(f"{name} is required")
+    return float(value)
+
 def build_ask_log_path(model_path: str | Path) -> Path:
     """
     Build ask-log path that mirrors the model checkpoint path.
@@ -131,18 +142,18 @@ def resolve_active_params(args, train_size: int) -> dict:
 
     # resolve init
     if args.init_size_pct is not None:
-        init_size = _pct_to_count(args.init_size_pct, train_size)
-        init_size_pct = float(args.init_size_pct)
+        init_size_pct = _required_float(args.init_size_pct, "init_size_pct")
+        init_size = _pct_to_count(init_size_pct, train_size)
     else:
-        init_size = int(args.init_size)
+        init_size = _required_int(args.init_size, "init_size")
         init_size_pct = 100.0 * init_size / train_size
 
     # resolve budget
     if args.budget_pct is not None:
-        budget = _pct_to_count(args.budget_pct, train_size)
-        budget_pct = float(args.budget_pct)
+        budget_pct = _required_float(args.budget_pct, "budget_pct")
+        budget = _pct_to_count(budget_pct, train_size)
     else:
-        budget = int(args.budget)
+        budget = _required_int(args.budget, "budget")
         budget_pct = 100.0 * budget / train_size
 
     if init_size <= 0:
@@ -159,7 +170,7 @@ def resolve_active_params(args, train_size: int) -> dict:
 
     # resolve batch / schedule
     if args.batch_pct_of_budget is not None:
-        batch_pct_of_budget = float(args.batch_pct_of_budget)
+        batch_pct_of_budget = _required_float(args.batch_pct_of_budget, "batch_pct_of_budget")
 
         if batch_pct_of_budget <= 0:
             raise ValueError("--batch-pct-of-budget must be > 0")
@@ -170,7 +181,7 @@ def resolve_active_params(args, train_size: int) -> dict:
         batch_schedule = build_batch_schedule_from_budget(budget, n_cycles_planned)
         batch = int(batch_schedule[0])  # nominal / first batch for metadata
     else:
-        batch = int(args.batch)
+        batch = _required_int(args.batch, "batch")
         if batch <= 0:
             raise ValueError("Resolved batch must be > 0")
         if batch > budget:
@@ -611,9 +622,9 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, seed: int = 42, s
     if n_pos_total == 0 or n_neg_total == 0:
         n_init = min(init_size, n_total)
         all_idx = np.arange(n_total)
-        init_idx = rng.choice(all_idx, size=n_init, replace=False)
+        init_idx = np.asarray(rng.choice(all_idx, size=n_init, replace=False), dtype=np.int64).reshape(-1)
 
-        init_set = set(init_idx.tolist())
+        init_set = {int(i) for i in init_idx}
         y_masked = [int(y[i]) if i in init_set else None for i in range(n_total)]
 
         active_ds = Dataset(X, y_masked)
@@ -650,8 +661,9 @@ def init_libact( X: np.ndarray, y: np.ndarray, init_size: int, seed: int = 42, s
     init_idx = np.concatenate([chosen_pos, chosen_neg])
 
     rng.shuffle(init_idx)
+    init_idx = np.asarray(init_idx, dtype=np.int64).reshape(-1)
 
-    init_set = set(init_idx.tolist())
+    init_set = {int(i) for i in init_idx}
     y_masked = [int(y[i]) if i in init_set else None for i in range(n_total)]
 
     active_ds = Dataset(X, y_masked)
