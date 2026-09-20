@@ -478,29 +478,17 @@ def compute_overall_test_ranking(test_ranking: pd.DataFrame) -> pd.DataFrame:
 
     require_columns(
         test_ranking,
-        ["dataset", "strategy", "mean_test_rank"],
+        ["dataset", "strategy", "test_position"],
         name="test_ranking",
     )
 
     test_ranking = test_ranking.copy()
-    test_ranking["test_position"] = (
-        test_ranking.groupby("dataset")["mean_test_rank"]
-        .rank(ascending=True, method="min")
-        .astype(int)
-    )
+    test_ranking["test_position"] = pd.to_numeric(test_ranking["test_position"], errors="coerce")
 
     dataset_names = sorted(map(str, test_ranking["dataset"].dropna().unique().tolist()))
     index_cols = ["strategy"]
     if "method_type" in test_ranking.columns:
         index_cols.append("method_type")
-
-    rank_pivot = test_ranking.pivot_table(
-        index=index_cols,
-        columns="dataset",
-        values="mean_test_rank",
-        aggfunc="mean",
-    )
-    rank_pivot = rank_pivot.rename(columns={dataset: f"rank_{dataset}" for dataset in dataset_names})
 
     position_pivot = test_ranking.pivot_table(
         index=index_cols,
@@ -512,16 +500,15 @@ def compute_overall_test_ranking(test_ranking: pd.DataFrame) -> pd.DataFrame:
         columns={dataset: f"position_{dataset}" for dataset in dataset_names}
     )
 
-    ranking = rank_pivot.join(position_pivot).reset_index()
-    rank_cols = [f"rank_{dataset}" for dataset in dataset_names if f"rank_{dataset}" in ranking.columns]
+    ranking = position_pivot.reset_index()
     position_cols = [
         f"position_{dataset}"
         for dataset in dataset_names
         if f"position_{dataset}" in ranking.columns
     ]
-    ranking["mean_rank"] = ranking[rank_cols].mean(axis=1, skipna=True)
-    ranking["n_datasets"] = ranking[rank_cols].count(axis=1)
-    ranking["overall_position"] = ranking["mean_rank"].rank(
+    ranking["mean_position"] = ranking[position_cols].mean(axis=1, skipna=True)
+    ranking["n_datasets"] = ranking[position_cols].count(axis=1)
+    ranking["overall_position"] = ranking["mean_position"].rank(
         ascending=True,
         method="min",
     ).astype(int)
@@ -529,9 +516,11 @@ def compute_overall_test_ranking(test_ranking: pd.DataFrame) -> pd.DataFrame:
     ordered_cols = ["strategy"]
     if "method_type" in ranking.columns:
         ordered_cols.append("method_type")
-    ordered_cols.extend([*position_cols, *rank_cols, "mean_rank", "n_datasets", "overall_position"])
+    ordered_cols.extend([*position_cols, "mean_position", "n_datasets", "overall_position"])
 
-    return ranking[ordered_cols].sort_values(["overall_position", "mean_rank", "strategy"])
+    return ranking[ordered_cols].sort_values(
+        ["overall_position", "mean_position", *position_cols, "strategy"]
+    )
 
 
 def compute_strategy_spread(active_test_summary: pd.DataFrame, metrics: list[str]) -> pd.DataFrame:

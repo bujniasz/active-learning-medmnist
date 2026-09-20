@@ -1276,3 +1276,171 @@ def plot_active_strategy_confusion_matrices(
         strategy_part = sanitize_filename_part(strategy)
         fig.savefig(plots_dir / f"confusion_matrix_{dataset_part}_{strategy_part}.png", dpi=180)
         plt.close(fig)
+
+
+# analyze_threshold_optimization.py
+def plot_threshold_score_curves(
+    curve_summary: pd.DataFrame,
+    out_dir: Path,
+    threshold_summary: pd.DataFrame | None = None,
+) -> None:
+    if len(curve_summary) == 0:
+        return
+
+    required_cols = [
+        "dataset",
+        "strategy",
+        "method_label",
+        "threshold",
+        "mean_val_threshold_score",
+    ]
+    missing = [c for c in required_cols if c not in curve_summary.columns]
+    if missing:
+        raise ValueError(f"Missing required threshold curve columns: {missing}")
+
+    plots_dir = out_dir / "plots" / "threshold_curves"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+
+    df = curve_summary.copy()
+    df["dataset"] = df["dataset"].astype(str)
+    df["strategy"] = df["strategy"].astype(str)
+    df["method_label"] = df["method_label"].astype(str)
+    df["threshold"] = pd.to_numeric(df["threshold"], errors="coerce")
+    df["mean_val_threshold_score"] = pd.to_numeric(
+        df["mean_val_threshold_score"],
+        errors="coerce",
+    )
+    df = df.dropna(subset=["threshold", "mean_val_threshold_score"])
+
+    threshold_marker_map: dict[tuple[str, str], float] = {}
+    if threshold_summary is not None and len(threshold_summary) > 0:
+        marker_required = ["dataset", "strategy", "selected_threshold_mean"]
+        marker_missing = [c for c in marker_required if c not in threshold_summary.columns]
+        if marker_missing:
+            raise ValueError(f"Missing required threshold summary columns: {marker_missing}")
+
+        marker_df = threshold_summary.copy()
+        marker_df["dataset"] = marker_df["dataset"].astype(str)
+        marker_df["strategy"] = marker_df["strategy"].astype(str)
+        marker_df["selected_threshold_mean"] = pd.to_numeric(
+            marker_df["selected_threshold_mean"],
+            errors="coerce",
+        )
+        marker_df = marker_df.dropna(subset=["selected_threshold_mean"])
+        threshold_marker_map = {
+            (str(row["dataset"]), str(row["strategy"])): float(row["selected_threshold_mean"])
+            for row in marker_df.to_dict(orient="records")
+        }
+
+    strategy_order = [
+        "egl_fc",
+        "entropy",
+        "entropy_diverse",
+        "mc_bald",
+        "mc_bald_diverse",
+        "random",
+        "supervised",
+    ]
+    strategy_colors = {
+        "egl_fc": "C0",
+        "entropy": "C1",
+        "entropy_diverse": "C2",
+        "mc_bald": "C3",
+        "mc_bald_diverse": "C4",
+        "random": "C5",
+        "supervised": "C6",
+    }
+
+    for dataset, g_dataset in df.groupby("dataset", sort=True):
+        fig, ax = plt.subplots(figsize=(10.8, 5.6))
+
+        present_strategies = [s for s in strategy_order if s in set(g_dataset["strategy"])]
+        extra_strategies = sorted(set(g_dataset["strategy"]) - set(present_strategies))
+
+        for strategy in [*present_strategies, *extra_strategies]:
+            g_method = g_dataset[g_dataset["strategy"] == strategy].copy()
+            if len(g_method) == 0:
+                continue
+
+            g_method = g_method.sort_values("threshold")
+            method_label = str(g_method["method_label"].iloc[0])
+            (line,) = ax.plot(
+                g_method["threshold"].to_numpy(),
+                g_method["mean_val_threshold_score"].to_numpy(),
+                linewidth=1.9,
+                label=method_label,
+                color=strategy_colors.get(strategy),
+            )
+
+            marker_threshold = threshold_marker_map.get((str(dataset), str(strategy)))
+            if marker_threshold is None:
+                best_score = g_method["mean_val_threshold_score"].max()
+                best_candidates = g_method[g_method["mean_val_threshold_score"] == best_score].copy()
+                best_candidates["distance_to_default"] = (best_candidates["threshold"] - 0.5).abs()
+                best_candidates = best_candidates.sort_values(
+                    by=["distance_to_default", "threshold"],
+                    ascending=[True, True],
+                )
+                if len(best_candidates) == 0:
+                    continue
+                best = best_candidates.iloc[0]
+                marker_threshold = float(best["threshold"])
+                marker_score = float(best["mean_val_threshold_score"])
+            else:
+                x = g_method["threshold"].to_numpy(dtype=float)
+                y = g_method["mean_val_threshold_score"].to_numpy(dtype=float)
+                marker_threshold = min(max(float(marker_threshold), float(x.min())), float(x.max()))
+                marker_score = float(np.interp(marker_threshold, x, y))
+
+            if np.isfinite(marker_threshold) and np.isfinite(marker_score):
+                ax.plot(
+                    [marker_threshold],
+                    [marker_score],
+                    marker="x",
+                    markersize=8.5,
+                    mew=2.0,
+                    linestyle="None",
+                    color=line.get_color(),
+                )
+
+        ax.axvline(
+            0.5,
+            linestyle="--",
+            linewidth=1.35,
+            color="black",
+            alpha=0.8,
+        )
+
+        dataset_label = DATASET_LABELS.get(str(dataset), str(dataset))
+        ax.set_title(f"{dataset_label}: wpływ progu decyzyjnego na wynik walidacyjny")
+        ax.set_xlabel("Próg decyzyjny [-]")
+        ax.set_ylabel("Średnia z accuracy oraz $F_1$ macro [-]")
+        ax.set_xlim(0.0, 1.0)
+        ax.xaxis.set_major_locator(MultipleLocator(0.1))
+
+        y_vals = g_dataset["mean_val_threshold_score"].dropna()
+        if len(y_vals) > 0:
+            y_max = float(y_vals.max())
+            y_focus_min = float(y_vals.quantile(0.08))
+            y_lower = max(0.7, np.floor((y_focus_min - 0.01) * 100.0) / 100.0)
+            y_lower = min(0.9, y_lower)
+            if y_lower < y_max:
+                ax.set_ylim(y_lower, min(1.0, y_max + 0.01))
+
+        ax.grid(True, alpha=0.25)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=7))
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.16),
+            ncol=4,
+            fontsize=8.8,
+            framealpha=0.95,
+            handlelength=1.7,
+            columnspacing=0.9,
+        )
+
+        fig.tight_layout()
+        fig.subplots_adjust(bottom=0.24)
+        dataset_part = sanitize_filename_part(dataset)
+        fig.savefig(plots_dir / f"{dataset_part}_threshold_score.png", dpi=200)
+        plt.close(fig)

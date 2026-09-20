@@ -21,6 +21,7 @@ src/
     analyze_active_screening.py
     analyze_active_strategies.py
     analyze_supervised.py
+    analyze_threshold_optimization.py
     plotting.py
   utils/
     labels_mapping.py
@@ -106,11 +107,28 @@ Typical usage:
 python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
 ```
 
+### `analysis/analyze_threshold_optimization.py`
+
+Post-processing script for decision-threshold optimization.
+
+It loads already trained supervised and Active Learning checkpoints, searches
+decision thresholds on the validation split and applies the selected threshold to
+the test split. The selected threshold maximizes the mean of accuracy and F1
+macro on validation data. The script compares test metrics obtained with the
+default threshold `0.5` and with the optimized threshold, and can generate
+averaged threshold-score curves.
+
+Typical usage:
+
+```bash
+python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analyze_threshold_optimization/default.yaml
+```
+
 ### `analysis/plotting.py`
 
 Shared plotting utilities used by the analysis scripts.
 
-It contains functions for screening curves, main-effect plots, pairwise delta plots, supervised and Active Learning confusion matrices, validation curves, train-loss curves and helper utilities for labels, colors and axis formatting.
+It contains functions for screening curves, main-effect plots, pairwise delta plots, supervised and Active Learning confusion matrices, validation curves, train-loss curves, threshold-score curves and helper utilities for labels, colors and axis formatting.
 
 ## Utilities
 

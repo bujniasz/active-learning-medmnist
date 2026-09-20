@@ -24,6 +24,7 @@
 !/results/readme.md
 !/results/final_*.csv
 !/results/example-plots/
+/results/threshold_optimization_final
 /results/supervised_final/
 /results/active_screening_final/
 

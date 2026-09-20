@@ -13,18 +13,18 @@
 # === Data ===
 # Path to a prepared MedMNIST dataset directory.
 # Example: data/bloodmnist, data/octmnist, data/pathmnist
-data_dir: data/pneumoniamnist
+data_dir: data/bloodmnist
 
 # === Output ===
 # Path where the best model checkpoint will be saved.
-model_path: models/pneumoniamnist-final_active_best-egl_fc-init3p-batch3pb-epc5-budget30p-148932.pth
+model_path: models/test-bloodmnist-final_active_best-least_confident-init1p-batch3pb-epc1-budget10p-17.pth
 
 # Path to CSV file where validation/test metrics will be appended.
-results_path: results/pneumoniamnist.csv
+results_path: results/test-bloodmnist.csv
 
 # === Reproducibility ===
 # Random seed used for NumPy, Python random and PyTorch.
-seed: 777
+seed: 17
 
 # === Strategy ===
 # Active Learning query strategy.
@@ -39,7 +39,7 @@ seed: 777
 #   mc_entropy_diverse
 #   mc_bald_diverse
 #   egl_fc
-strategy: egl_fc
+strategy: least_confident
 
 # === Active Learning mode ===
 # Choose how init size, budget and batch size are specified.
@@ -53,8 +53,8 @@ al_mode: percent
 # init_size_pct: initial labeled set size as % of training set.
 # budget_pct: total AL query budget as % of training set.
 # batch_pct_of_budget: one query batch as % of resolved budget.
-init_size_pct: 3
-budget_pct: 30
+init_size_pct: 1
+budget_pct: 10
 batch_pct_of_budget: 3
 
 # === Absolute mode ===
@@ -69,4 +69,4 @@ batch: null
 
 # === Training ===
 # Number of training epochs after each AL query cycle.
-epochs_per_cycle: 5
+epochs_per_cycle: 1
