@@ -13,6 +13,7 @@ Each main script has its own `default.yaml` file. These default configs are inte
 - `analysis/analyze_active_screening/default.yaml` - config for post-processing and analysis of Active Learning screening results.
 - `analysis/analyze_supervised/default.yaml` - config for post-processing and analysis of supervised results.
 - `analysis/analyze_active_strategies/default.yaml` - config for post-processing and analysis of final Active Learning strategy-comparison results.
+- `analysis/analyze_threshold_optimization/default.yaml` - config for post-training decision-threshold optimization.
 
 ## Usage
 
@@ -25,4 +26,5 @@ python3 -m src.run_experiments -c configs/run_experiments/active/default.yaml
 python3 -m src.analysis.analyze_active_screening -c configs/analysis/analyze_active_screening/default.yaml
 python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervised/default.yaml
 python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
+python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analyze_threshold_optimization/default.yaml
 ```

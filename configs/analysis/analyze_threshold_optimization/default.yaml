@@ -1,0 +1,92 @@
+# =============================================================================
+# Config for: src/analysis/analyze_threshold_optimization.py
+#
+# Run with:
+#   python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analyze_threshold_optimization/default.yaml
+#
+# This script performs post-training decision-threshold optimization for already
+# trained models. It does not train models again and does not select a different
+# active-learning cycle. For each selected model, it searches decision thresholds
+# on the validation split and applies the selected threshold to the test split.
+#
+# The optimized threshold is selected by maximizing the mean of:
+#   - accuracy
+#   - F1 macro
+#
+# ROC AUC and Average Precision are not optimized here because they are computed
+# from probabilistic scores and do not depend on a single decision threshold.
+#
+# Expected outputs:
+#   - threshold_runs.csv
+#   - threshold_summary.csv
+#   - threshold_curves.csv
+#   - threshold_curve_summary.csv
+#   - plots/threshold_curves/*.png
+#
+# NOTE:
+# Model directories are the primary input. The optional CSV files are used only
+# to restrict the analysis to model names present in previous final-result logs.
+# Set a CSV path to null to skip this restriction.
+#
+# Set active_models_dir or supervised_models_dir to null if that model family
+# should be skipped.
+#
+# Optional filters such as datasets, strategies and seeds can be added manually
+# when only a subset of models should be analyzed. If omitted, all available
+# records are used.
+# =============================================================================
+
+# === Inputs ===
+# Optional CSV with final active learning runs.
+# Set to null to discover all .pth files from active_models_dir.
+active_results_csv: results/final_active_best.csv
+
+# Optional CSV with final supervised runs.
+# Set to null to discover all .pth files from supervised_models_dir.
+supervised_results_csv: results/final_supervised.csv
+
+# Directory with active learning model checkpoints.
+# Set to null to skip active learning models.
+active_models_dir: models/final_active_best
+
+# Directory with supervised model checkpoints.
+# Set to null to skip supervised models.
+supervised_models_dir: models/final_supervised
+
+# === Output ===
+# Directory where analysis results (tables and plots) will be saved.
+out_dir: results/threshold_optimization_final
+
+# === Evaluation ===
+# Batch size used only for validation/test inference.
+batch_size: 256
+
+# Decision-threshold grid checked on the validation split.
+thresholds:
+  min: 0.01
+  max: 0.99
+  step: 0.01
+
+# === Plots ===
+# Generate one averaged threshold-score curve plot per dataset.
+make_plots: true
+
+# === Optional filters ===
+# Uncomment and edit to analyze only selected datasets, strategies or seeds.
+#
+# datasets:
+#   - octmnist
+#   - pathmnist
+#   - pneumoniamnist
+#
+# strategies:
+#   - random
+#   - entropy
+#   - mc_bald
+#   - entropy_diverse
+#   - mc_bald_diverse
+#   - egl_fc
+#
+# seeds:
+#   - 17
+#   - 246
