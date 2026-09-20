@@ -1,5 +1,7 @@
 # Active Learning Medmnist
 
+Polish version available: [README-pl.md](README-pl.md)
+
 This repository contains code, configuration files and selected experiment artifacts for research on applying **Active Learning** to medical image classification using **MedMNIST2D** datasets.
 
 The goal of the project is to compare standard fully supervised learning with an Active Learning setup, where the model does not use the full labeled training set from the start. Instead, it iteratively selects new samples for annotation. The experiments evaluate whether informed sample selection can achieve results close to fully supervised training while using a smaller labeling budget.
@@ -17,7 +19,8 @@ The project includes:
 - model checkpoint saving;
 - asklog saving, i.e. storing the sample IDs selected during Active Learning cycles;
 - supervised result analysis;
-- Active Learning screening and strategy-comparison analysis.
+- Active Learning screening and strategy-comparison analysis;
+- decision-threshold optimization analysis.
 
 ## Data
 
@@ -135,6 +138,12 @@ Active Learning strategy-comparison analysis:
 python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
 ```
 
+Decision-threshold optimization analysis:
+
+```bash
+python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analyze_threshold_optimization/default.yaml
+```
+
 ## Typical Workflow
 
 1. Activate the `venv` environment.
@@ -144,7 +153,7 @@ python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_ac
 5. Run a single training job or an experiment sweep through `src.run_experiments`.
 6. Check experiment results in `results/`.
 7. For Active Learning, also inspect checkpoints in `models/` and asklogs in `logs/`.
-8. If needed, run supervised, screening or strategy-comparison analysis.
+8. If needed, run supervised, screening, strategy-comparison or threshold-optimization analysis.
 
 ## Repository Structure
 
@@ -206,6 +215,7 @@ See: `src/readme.md`.
 - `src/analysis/analyze_supervised.py` - supervised result analysis.
 - `src/analysis/analyze_active_screening.py` - Active Learning screening analysis.
 - `src/analysis/analyze_active_strategies.py` - final Active Learning strategy-comparison analysis.
+- `src/analysis/analyze_threshold_optimization.py` - decision-threshold optimization analysis.
 - `src/analysis/plotting.py` - plot generation utilities.
 - `src/utils/load_data.py` - data loading and preparation.
 - `src/utils/labels_mapping.py` - label mapping for binary tasks.
@@ -229,7 +239,8 @@ Their roles:
 
 Additional analysis scripts can generate derived summaries and plots, for example
 supervised test metric summaries, Active Learning screening summaries, strategy
-rankings and aggregated confusion matrices.
+rankings, decision-threshold optimization summaries and aggregated confusion
+matrices.
 
 ## Reproducibility Notes
 

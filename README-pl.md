@@ -17,7 +17,8 @@ Projekt obejmuje:
 - zapis checkpointów modeli;
 - zapis asklogów, czyli list próbek wybranych w cyklach Active Learning;
 - analizę wyników klasycznego uczenia nadzorowanego;
-- analizę wyników screeningu oraz finalnego porównania strategii Active Learning.
+- analizę wyników screeningu oraz finalnego porównania strategii Active Learning;
+- analizę optymalizacji progu decyzyjnego.
 
 ## Dane
 
@@ -135,6 +136,12 @@ Analiza finalnego porównania strategii Active Learning:
 python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
 ```
 
+Analiza optymalizacji progu decyzyjnego:
+
+```bash
+python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analyze_threshold_optimization/default.yaml
+```
+
 ## Typowy Flow Pracy
 
 1. Aktywuj środowisko `venv`.
@@ -144,7 +151,7 @@ python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_ac
 5. Uruchom pojedynczy trening albo sweep przez `src.run_experiments`.
 6. Sprawdź wyniki w `results/`.
 7. Dla Active Learning sprawdź dodatkowo checkpointy w `models/` i asklogi w `logs/`.
-8. W razie potrzeby uruchom analizę wyników supervised, screeningu lub finalnego porównania strategii.
+8. W razie potrzeby uruchom analizę wyników supervised, screeningu, finalnego porównania strategii lub optymalizacji progu.
 
 ## Struktura Repozytorium
 
@@ -205,6 +212,7 @@ Więcej: `src/readme.md`.
 - `src/analysis/analyze_supervised.py` - analiza wyników supervised.
 - `src/analysis/analyze_active_screening.py` - analiza screeningu Active Learning.
 - `src/analysis/analyze_active_strategies.py` - analiza finalnego porównania strategii Active Learning.
+- `src/analysis/analyze_threshold_optimization.py` - analiza optymalizacji progu decyzyjnego.
 - `src/analysis/plotting.py` - funkcje do generowania wykresów.
 - `src/utils/load_data.py` - ładowanie i przygotowanie danych.
 - `src/utils/labels_mapping.py` - mapowanie etykiet do zadań binarnych.
@@ -228,7 +236,8 @@ Ich rola:
 
 Dodatkowe skrypty analityczne mogą generować pochodne podsumowania i wykresy,
 na przykład podsumowanie metryk testowych supervised, podsumowania screeningu,
-rankingi strategii oraz zagregowane macierze pomyłek.
+rankingi strategii, podsumowania optymalizacji progu decyzyjnego oraz
+zagregowane macierze pomyłek.
 
 ## Uwagi Reprodukcyjne
 

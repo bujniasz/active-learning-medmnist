@@ -26,7 +26,7 @@ supervised_results_csv: results/final_supervised.csv
 
 # === Output ===
 # Directory where analysis results (tables and plots) will be saved.
-out_dir: results/active_strategies_final
+out_dir: results/final_active_strategies
 
 # === Filters ===
 # Optional dataset filter. Set to null to use all datasets present in the CSV.

@@ -55,7 +55,7 @@ supervised_models_dir: models/final_supervised
 
 # === Output ===
 # Directory where analysis results (tables and plots) will be saved.
-out_dir: results/threshold_optimization_final
+out_dir: results/final_threshold_optimization
 
 # === Evaluation ===
 # Batch size used only for validation/test inference.
