@@ -19,7 +19,7 @@ results_csv: results/final_supervised.csv
 
 # === Output ===
 # Directory where analysis results (tables and plots) will be saved.
-out_dir: results/supervised_final
+out_dir: results/final_supervised
 
 # === Plots ===
 # Whether to generate a plot with aggregated confusion matrices.

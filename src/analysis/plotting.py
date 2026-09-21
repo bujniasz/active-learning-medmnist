@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import MaxNLocator, MultipleLocator
 
+AXIS_LABEL_FONTSIZE = 11
+plt.rcParams["axes.labelsize"] = AXIS_LABEL_FONTSIZE
+
 # analyze_active_screening.py
 def sanitize_filename_part(x) -> str:
     s = str(x)
@@ -126,7 +129,7 @@ def plot_absolute_colored_effect(
         ax.set_title(f"Wpływ parametru {pretty_name} (wartości absolutne)")
         ax.set_xlabel(f"{pretty_name} – wartość absolutna")
 
-    ax.set_ylabel("Średni AULC (znormalizowany)")
+    ax.set_ylabel("Średnie AULC (znormalizowane)")
 
     ax.grid(axis="y", alpha=0.3)
     maybe_set_zoomed_yaxis(ax, y_vals)
@@ -480,19 +483,19 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
     metric_labels = {
         "delta_aulc_norm": "Różnica AULC (znormalizowanego) [-]",
         "delta_last_iteration_model": "Różnica wyniku walidacyjnego [-]",
-        "delta_final_test_model": "Różnica średniej z metryk testowych [-]",
+        "delta_final_test_model": "Różnica średnich wyników testowych [-]",
     }
 
     metric_titles = {
         "delta_aulc_norm": "rozkład różnic AULC",
         "delta_last_iteration_model": "rozkład różnic wyniku walidacyjnego",
-        "delta_final_test_model": "rozkład różnic średniej z metryk testowych",
+        "delta_final_test_model": "rozkład różnic średnich wyników testowych",
     }
 
     winrate_titles = {
         "delta_aulc_norm": "bilans porównań AULC",
         "delta_last_iteration_model": "bilans porównań wyniku walidacyjnego",
-        "delta_final_test_model": "bilans porównań średniej z metryk testowych",
+        "delta_final_test_model": "bilans porównań średnich wyników testowych",
     }
 
     param_labels = {
@@ -804,7 +807,7 @@ def plot_main_effects(
     draw_bar_chart(
         metric_col="mean_aulc_norm",
         title=title_aulc_map.get(pretty_name, f"Wpływ parametru {pretty_name} na przebieg aktywnego uczenia"),
-        ylabel="Średni AULC (znormalizowany) [-]",
+        ylabel="Średnie AULC (znormalizowane) [-]",
         out_name=f"main_effects_{pretty_name}.png",
         ylim=ylim_map.get(pretty_name, (0.8, 0.9)),
     )
@@ -812,7 +815,7 @@ def plot_main_effects(
     draw_bar_chart(
         metric_col="mean_final_test_model",
         title=title_test_map.get(pretty_name, f"Wpływ parametru {pretty_name} na wynik testowy"),
-        ylabel="Średnia metryka testowa [-]",
+        ylabel="Średni wynik testowy [-]",
         out_name=f"main_effects_{pretty_name}_test.png",
         ylim=test_ylim_map.get(pretty_name),
     )
@@ -1134,7 +1137,7 @@ def plot_active_strategy_validation_metric(
             alpha=0.8,
         )
         ax.annotate(
-            f"Supervised = {baseline:.4f}",
+            f"Klasyfikator nadzorowany = {baseline:.4f}",
             xy=(0.01, baseline),
             xycoords=ax.get_yaxis_transform(),
             xytext=(0, -5),
