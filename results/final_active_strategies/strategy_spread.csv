@@ -1,0 +1,13 @@
+dataset,metric,best_strategy,best_value,best_std,second_strategy,second_value,second_std,worst_strategy,worst_value,worst_std,best_minus_second,best_minus_worst
+octmnist,acc,entropy_diverse,0.8866,0.0111,entropy,0.8838,0.0121,random,0.8594,0.0128,0.0028,0.0272
+octmnist,ap,entropy_diverse,0.9844,0.0009,mc_bald,0.9843,0.0014,egl_fc,0.9815,0.0031,0.0001,0.0029
+octmnist,auc,entropy_diverse,0.9529,0.0033,entropy,0.9514,0.0049,random,0.9438,0.0031,0.0015,0.0091
+octmnist,f1_macro,entropy_diverse,0.8588,0.0125,entropy,0.8584,0.0126,random,0.8314,0.0105,0.0004,0.0274
+pathmnist,acc,entropy,0.8983,0.0048,mc_bald_diverse,0.8943,0.0095,entropy_diverse,0.8874,0.0153,0.004,0.0109
+pathmnist,ap,entropy,0.9322,0.0053,mc_bald,0.9212,0.028,mc_bald_diverse,0.9162,0.0259,0.0109,0.016
+pathmnist,auc,entropy,0.9586,0.0059,mc_bald_diverse,0.957,0.0046,entropy_diverse,0.9481,0.0176,0.0016,0.0104
+pathmnist,f1_macro,entropy,0.89,0.0045,mc_bald_diverse,0.8867,0.01,entropy_diverse,0.8797,0.0166,0.0033,0.0102
+pneumoniamnist,acc,egl_fc,0.8689,0.008,mc_bald_diverse,0.8686,0.0201,mc_bald,0.8606,0.0132,0.0003,0.0083
+pneumoniamnist,ap,random,0.9586,0.0153,entropy_diverse,0.9317,0.0214,egl_fc,0.9096,0.0358,0.0269,0.049
+pneumoniamnist,auc,random,0.9516,0.0106,entropy_diverse,0.9309,0.0169,mc_bald_diverse,0.9106,0.0141,0.0207,0.041
+pneumoniamnist,f1_macro,egl_fc,0.8482,0.0109,mc_bald_diverse,0.8478,0.0266,mc_bald,0.837,0.0173,0.0004,0.0113

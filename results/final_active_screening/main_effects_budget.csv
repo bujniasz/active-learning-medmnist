@@ -1,0 +1,4 @@
+budget_pct,mean_aulc_norm,std_aulc_norm,mean_last_iteration_model,std_last_iteration_model,mean_best_val,std_best_val,count,mean_final_test_model,std_final_test_model
+30.0,0.8793,0.0305,0.9393,0.0185,0.9512,0.01,240,0.9455,0.0105
+20.0,0.8655,0.0327,0.9216,0.035,0.9421,0.0115,240,0.9362,0.0128
+10.0,0.8413,0.0399,0.9016,0.0326,0.9241,0.0134,240,0.9155,0.0142

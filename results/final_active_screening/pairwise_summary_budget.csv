@@ -1,0 +1,4 @@
+param,comparison,v1,v2,n_pairs,n_pairs_aulc,median_delta_aulc_norm,mean_delta_aulc_norm,win_rate_v1_aulc_pct,win_rate_v2_aulc_pct,ties_aulc,n_pairs_last_iteration_model,median_delta_last_iteration_model,mean_delta_last_iteration_model,win_rate_v1_last_iteration_model_pct,win_rate_v2_last_iteration_model_pct,ties_last_iteration_model,n_pairs_final_test_model,median_delta_final_test_model,mean_delta_final_test_model,win_rate_v1_final_test_model_pct,win_rate_v2_final_test_model_pct,ties_final_test_model
+budget_pct,10_vs_20,10.0,20.0,240,240,-0.022,-0.0243,3.3333,92.9167,9,240,-0.0204,-0.02,21.6667,75.0,8,240,-0.0219,-0.0207,2.5,94.1667,8
+budget_pct,10_vs_30,10.0,30.0,240,240,-0.0355,-0.0381,0.0,100.0,0,240,-0.0346,-0.0377,8.75,89.5833,4,240,-0.0295,-0.03,0.0,99.1667,2
+budget_pct,20_vs_30,20.0,30.0,240,240,-0.0132,-0.0138,8.3333,82.0833,23,240,-0.0097,-0.0177,22.5,70.4167,17,240,-0.0086,-0.0093,12.5,76.6667,26

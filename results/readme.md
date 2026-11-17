@@ -1,30 +1,202 @@
 # Results
 
-This directory is used for experiment outputs generated from training and analysis scripts.
+This directory contains the final experiment logs and the tables and plots
+derived from them. The top-level `final_*.csv` files are written by the
+training sweeps. The four top-level `final_*` directories are generated later
+by the analysis scripts.
 
-Training scripts append metric rows to CSV files in this directory. These CSV files store validation and test results, including dataset name, strategy, seed, active learning parameters, labeled sample counts and evaluation metrics.
-
-Plotting and analysis scripts can also create subdirectories here. These folders usually contain figures and summary tables generated from the result CSV files.
-
-## Typical Outputs
-
-Common result files include:
+## Data Flow
 
 ```text
-results/final_supervised.csv
-results/final_active_best.csv
-results/final_active_screening.csv
+final_active_screening.csv
+  -> final_active_screening/
+
+final_supervised.csv
+  -> final_supervised/
+
+final_active_best.csv + final_supervised.csv
+  -> final_active_strategies/
+
+final_active_best.csv + final_supervised.csv
+  + models/final_active_best/ + models/final_supervised/
+  -> final_threshold_optimization/
 ```
 
-Common plot directories follow the CSV name:
+The CSV files are therefore the experiment logs, while the directories contain
+reproducible post-processing results. The threshold analysis additionally loads
+the saved model checkpoints because it must run validation and test inference
+again for different decision thresholds.
 
-```text
-results/final_active_best/
-results/final_supervised/
+## Experiment CSV Files
+
+All three experiment CSV files use the same row format. Rows identify the
+dataset, strategy, seed and model checkpoint; store the Active Learning setup
+where applicable; and contain validation or test values for accuracy, F1 macro,
+ROC AUC, Average Precision and `val_mean`. They also record the training step,
+the number of labeled samples and confusion-matrix counts for final test rows.
+
+### `final_active_screening.csv`
+
+Raw results from the Active Learning hyperparameter screening performed on
+`bloodmnist`.
+
+- Strategies: `least_confident`, `margin`, `mc_entropy` and
+  `mc_entropy_diverse`.
+- Varied parameters: initial labeled-set percentage, annotation-budget
+  percentage, batch percentage of the budget and epochs per cycle.
+- Repetitions: five fixed random seeds.
+- Rows: validation metrics from successive query cycles and final validation
+  and test evaluations for each configuration.
+
+This file is the only final experiment CSV containing `bloodmnist`. Its results
+were used to select the fixed setup for the final strategy comparison.
+
+### `final_supervised.csv`
+
+Raw results from the fully supervised baseline experiments on `octmnist`,
+`pathmnist` and `pneumoniamnist`.
+
+- Strategy label: `full_train_set`.
+- Training data: the complete labeled training split of each dataset.
+- Repetitions: five fixed random seeds, matching the Active Learning runs.
+- Rows: validation metrics from successive epochs and final validation and test
+  evaluations.
+
+The corresponding sweep is defined in
+`configs/run_experiments/supervised/supervised_final.yaml`.
+
+### `final_active_best.csv`
+
+Raw results from the final Active Learning strategy comparison on `octmnist`,
+`pathmnist` and `pneumoniamnist`.
+
+- Strategies: `random`, `entropy`, `mc_bald`, `entropy_diverse`,
+  `mc_bald_diverse` and `egl_fc`.
+- Fixed setup selected from the BloodMNIST screening: 3% initial labeled set,
+  30% annotation budget, batches equal to 3% of the budget and five training
+  epochs per query cycle.
+- Repetitions: five fixed random seeds, giving 90 runs in total.
+- Rows: validation metrics from successive query cycles and final validation
+  and test evaluations.
+
+The corresponding sweep is defined in
+`configs/run_experiments/active/active_final_best.yaml`.
+
+The name `final_active_best.csv` refers to using the best setup selected during
+screening. The comparison of the six query strategies stored in this file is
+summarized in `final_active_strategies/`.
+
+## Derived Analysis Directories
+
+### `final_active_screening/`
+
+Generated from `final_active_screening.csv` by
+`src/analysis/analyze_active_screening.py`.
+
+Important outputs:
+
+- `run_summary.csv` - one summary row per screening run, including normalized
+  AULC, the last-cycle result, the best validation result and final test
+  metrics;
+- `main_effects_*.csv` - aggregated results for each value of the four screened
+  hyperparameters;
+- `pairwise_*.csv` and `pairwise_summary_*.csv` - matched comparisons, deltas
+  and win rates between hyperparameter values;
+- `wilcoxon_*.csv` and `wilcoxon_all.csv` - paired Wilcoxon signed-rank test
+  results;
+- `plots/` - screening curves, main-effect figures and pairwise comparison
+  plots.
+
+Regenerate with:
+
+```bash
+python3 -m src.analysis.analyze_active_screening \
+  -c configs/analysis/analyze_active_screening/default.yaml
+```
+
+### `final_supervised/`
+
+Generated from `final_supervised.csv` by
+`src/analysis/analyze_supervised.py`.
+
+Important outputs:
+
+- `summary.csv` - mean and standard deviation of final test metrics across
+  seeds for each dataset;
+- `confusion_matrices.csv` - confusion-matrix counts aggregated across seeds;
+- `plots/` - one aggregated confusion-matrix figure per dataset.
+
+Regenerate with:
+
+```bash
+python3 -m src.analysis.analyze_supervised \
+  -c configs/analysis/analyze_supervised/default.yaml
+```
+
+### `final_active_strategies/`
+
+Generated by `src/analysis/analyze_active_strategies.py`. The primary input is
+`final_active_best.csv`; `final_supervised.csv` supplies the supervised
+baselines and enables direct Active Learning versus supervised comparisons.
+
+Important output groups:
+
+- `val_aulc_runs.csv`, `val_aulc_summary.csv` and
+  `best_val_mean_cycles.csv` - validation-curve and AULC summaries;
+- `active_test_summary.csv`, `test_ranking.csv` and
+  `overall_test_ranking.csv` - final Active Learning test summaries and
+  rankings;
+- `supervised_val_baselines.csv`, `time_to_supervised_baseline.csv` and
+  `validation_cycle_summary.csv` - comparisons of Active Learning validation
+  curves with supervised baselines;
+- `test_summary_with_supervised.csv`,
+  `test_ranking_with_supervised.csv`,
+  `overall_test_ranking_with_supervised.csv` and
+  `active_vs_supervised_spread.csv` - combined test comparisons including the
+  supervised method;
+- `strategy_spread.csv` - differences between the best, second-best and worst
+  Active Learning strategies for each dataset and metric;
+- `confusion_matrices.csv` - confusion-matrix counts aggregated by dataset and
+  strategy;
+- `plots/` - validation curves, training-loss curves and confusion matrices.
+
+Regenerate with:
+
+```bash
+python3 -m src.analysis.analyze_active_strategies \
+  -c configs/analysis/analyze_active_strategies/default.yaml
+```
+
+### `final_threshold_optimization/`
+
+Generated by `src/analysis/analyze_threshold_optimization.py`. The script uses
+`final_active_best.csv` and `final_supervised.csv` to select final model names,
+then loads their checkpoints from `models/final_active_best/` and
+`models/final_supervised/`. It selects a threshold on the validation split by
+maximizing the mean of accuracy and F1 macro, then evaluates that threshold on
+the test split.
+
+Important outputs:
+
+- `threshold_runs.csv` - selected threshold and default-versus-optimized
+  validation/test metrics for every model run;
+- `threshold_summary.csv` - results aggregated across seeds by dataset and
+  method;
+- `threshold_curves.csv` - full validation threshold curves for individual
+  runs;
+- `threshold_curve_summary.csv` - threshold curves aggregated across seeds;
+- `plots/threshold_curves/` - averaged threshold-score plots.
+
+Regenerate with:
+
+```bash
+python3 -m src.analysis.analyze_threshold_optimization \
+  -c configs/analysis/analyze_threshold_optimization/default.yaml
 ```
 
 ## Versioned Results
 
-The final CSV files matching `results/final_*.csv` are kept in Git because they contain the main experiment results used by the project.
-
-Generated plot directories and older experimental outputs are ignored by default to avoid versioning all derived artifacts.
+The three final experiment CSV files and the four derived `final_*` analysis
+directories are the canonical result artifacts used in the project. Other
+files under `results/` are intermediate, exploratory or older local outputs and
+are ignored by Git by default.

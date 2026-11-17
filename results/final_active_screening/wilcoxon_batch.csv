@@ -1,0 +1,10 @@
+param,comparison,v1,v2,metric,n_pairs,n_nonzero,median_delta,mean_delta,wilcoxon_stat,p_value,significant_0.05,significant_0.01,direction
+batch,3_vs_10,3.0,10.0,aulc_norm,240,240,0.0273,0.0304,91.0,<1e-16,True,True,v1_better
+batch,3_vs_10,3.0,10.0,last-iteration-model,240,240,0.0152,0.0176,5149.5,<1e-16,True,True,v1_better
+batch,3_vs_10,3.0,10.0,final-test-model,240,240,0.0149,0.016,728.0,<1e-16,True,True,v1_better
+batch,3_vs_5,3.0,5.0,aulc_norm,240,240,0.0121,0.0129,1811.0,<1e-16,True,True,v1_better
+batch,3_vs_5,3.0,5.0,last-iteration-model,240,240,0.0059,0.0091,8469.0,2.63e-08,True,True,v1_better
+batch,3_vs_5,3.0,5.0,final-test-model,240,240,0.0058,0.0068,5011.5,<1e-16,True,True,v1_better
+batch,5_vs_10,5.0,10.0,aulc_norm,240,240,0.0162,0.0175,1696.0,<1e-16,True,True,v1_better
+batch,5_vs_10,5.0,10.0,last-iteration-model,240,239,0.0084,0.0085,9355.5,3.18e-06,True,True,v1_better
+batch,5_vs_10,5.0,10.0,final-test-model,240,240,0.0087,0.0092,3743.0,<1e-16,True,True,v1_better

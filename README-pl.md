@@ -41,7 +41,8 @@ data/<dataset>/
   test_labels.npy
 ```
 
-Szczegóły pobierania i przygotowania danych są opisane w `data/readme.md`.
+Szczegóły pobierania i przygotowania danych są opisane w
+[`data/readme.md`](data/readme.md).
 
 ## Model
 
@@ -142,7 +143,7 @@ Analiza optymalizacji progu decyzyjnego:
 python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analyze_threshold_optimization/default.yaml
 ```
 
-## Typowy Flow Pracy
+## Typowy Przebieg Pracy
 
 1. Aktywuj środowisko `venv`.
 2. Zainstaluj zależności z `requirements.txt`.
@@ -170,13 +171,13 @@ python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analy
 
 Pliki konfiguracyjne YAML dla głównych skryptów. Każdy główny workflow ma swój `default.yaml`, który służy zarówno jako przykład uruchomienia, jak i dokumentacja parametrów.
 
-Więcej: `configs/readme.md`.
+Więcej: [`configs/readme.md`](configs/readme.md).
 
 ### `data/`
 
 Dane wejściowe w formacie `.npy`, podzielone na `train`, `val` i `test`. W repozytorium może znajdować się tylko część danych, a pozostałe zbiory należy pobrać zgodnie z instrukcją.
 
-Więcej: `data/readme.md`.
+Więcej: [`data/readme.md`](data/readme.md).
 
 ### `logs/`
 
@@ -184,25 +185,25 @@ Asklogi generowane podczas Active Learning. Pliki `.asklog.json` zapisują, któ
 
 W repozytorium trzymany jest reprezentatywny przykład asklogów dla `final_active_best/octmnist`, a pozostałe logi są traktowane jako artefakty generowane.
 
-Więcej: `logs/readme.md`.
+Więcej: [`logs/readme.md`](logs/readme.md).
 
 ### `models/`
 
 Checkpointy modeli `.pth` zapisywane podczas treningu. Modele są duże, dlatego domyślnie nie są wersjonowane. W repozytorium znajduje się jeden reprezentatywny checkpoint przykładowy.
 
-Więcej: `models/readme.md`.
+Więcej: [`models/readme.md`](models/readme.md).
 
 ### `results/`
 
 CSV z wynikami eksperymentów oraz foldery z wykresami i tabelami generowanymi na podstawie tych CSV. Finalne pliki `results/final_*.csv` są wersjonowane, a pozostałe artefakty są domyślnie ignorowane.
 
-Więcej: `results/readme.md`.
+Więcej: [`results/readme.md`](results/readme.md).
 
 ### `src/`
 
 Kod źródłowy projektu. Zawiera skrypty treningowe, launcher eksperymentów, analizę wyników, wykresy oraz funkcje pomocnicze do ładowania danych, mapowania etykiet i obsługi modelu.
 
-Więcej: `src/readme.md`.
+Więcej: [`src/readme.md`](src/readme.md).
 
 ## Najważniejsze Pliki Źródłowe
 

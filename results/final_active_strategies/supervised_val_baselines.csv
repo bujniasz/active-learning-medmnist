@@ -1,0 +1,13 @@
+dataset,metric,supervised_val_baseline,std_supervised_val_baseline,n_runs
+octmnist,acc,0.9416,0.0119,5
+octmnist,ap,0.9884,0.0025,5
+octmnist,auc,0.9839,0.0035,5
+octmnist,f1_macro,0.9415,0.0118,5
+pathmnist,acc,0.9334,0.0245,5
+pathmnist,ap,0.9803,0.0154,5
+pathmnist,auc,0.9835,0.0121,5
+pathmnist,f1_macro,0.9329,0.0246,5
+pneumoniamnist,acc,0.9679,0.0037,5
+pneumoniamnist,ap,0.9985,0.0002,5
+pneumoniamnist,auc,0.9957,0.0007,5
+pneumoniamnist,f1_macro,0.9571,0.0054,5
