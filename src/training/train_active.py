@@ -257,40 +257,6 @@ def get_entropy_scores(X_u, wrapper):
     probs = wrapper.predict_proba(X_u)
     return entropy_rows(probs)
 
-# def select_uncertainty_entropy_full_pool(active_ds: Dataset, wrapper, k: int) -> list[int]:
-#     """Select top-k unlabeled samples by predictive entropy on the FULL pool.
-
-#     Implements:
-#         x* = argmax_{x in U} ( - sum_i p(y_i|x) log p(y_i|x) )
-
-#     Notes:
-#       - Uses wrapper.predict_proba on the full unlabeled pool.
-#       - Deterministic forward pass assumed (dropout disabled in wrapper.predict_proba).
-#       - Returns libact entry ids (integers compatible with active_ds.update()).
-#     """
-#     if k <= 0:
-#         return []
-
-#     # Official libact API: returns IDs and the corresponding feature matrix/array
-#     unlabeled_entry_ids, X_pool = active_ds.get_unlabeled_entries()
-#     if len(unlabeled_entry_ids) == 0:
-#         return []
-
-#     probs = wrapper.predict_proba(X_pool)  # shape: (N, C)
-
-#     # Entropy: -sum p log p
-#     eps = 1e-12
-#     p = np.clip(probs, eps, 1.0)
-#     scores = -np.sum(p * np.log(p), axis=1)  # shape: (N,)
-
-#     k = min(k, len(unlabeled_entry_ids))
-
-#     # Top-k by entropy (descending)
-#     top_idx = np.argpartition(scores, -k)[-k:]                # fast top-k (unordered)
-#     top_idx = top_idx[np.argsort(scores[top_idx])[::-1]]      # sort those k desc
-
-#     return [int(unlabeled_entry_ids[int(j)]) for j in top_idx]
-
 def bald_score(probs_T: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """
     probs_T: (T, N, C)
@@ -343,7 +309,7 @@ def egl_fc_score(emb: np.ndarray, probs: np.ndarray) -> np.ndarray:
     return (emb_norm2 + 1.0) * (1.0 - sum_p2)      # (N,)
 
 
-# === CUSTOM WRAPPER FOR libact <-> resnet TO WORK ===
+# === libact-compatible wrapper for the ResNet classifier ===
 # === https://github.com/ntucllab/libact/blob/master/libact/base/interfaces.py ===
 class TorchModelWrapper(ProbabilisticModel):
     def __init__(self, in_channels: int, num_classes: int, lr: float = 1e-3, epochs_per_cycle: int = 1, seed: int | None = None, dropout_p: float = 0.5):
@@ -472,8 +438,6 @@ class TorchModelWrapper(ProbabilisticModel):
             # output shape: (N, 512, 1, 1)
             embeddings.append(output.detach().cpu())
 
-        #handle = self.model.avgpool.register_forward_hook(hook_fn)
-
         handle = self.model.backbone.avgpool.register_forward_hook(hook_fn)
 
         with torch.inference_mode():
@@ -505,7 +469,7 @@ class TorchModelWrapper(ProbabilisticModel):
         ds = TensorDataset(X_t, y_t)
         n = len(ds)
         if n < 2:
-            return None  # explicit
+            return None
 
         eff_bs = min(batch_size, n)
         gen = None
@@ -529,8 +493,6 @@ class TorchModelWrapper(ProbabilisticModel):
 
             avg_loss = total_loss / max(1, len(dl))
             epoch_losses.append(avg_loss)
-            # if verbose:
-            #     print(f"   🔹 Training loss: {avg_loss:.4f}")
 
         # train_loss per cycle = mean loss across epochs
         return float(np.mean(epoch_losses))
@@ -699,19 +661,17 @@ def run_active_loop(
     initial_best_sel: float,
 ) -> str:
 
-    # CHANGED: asked nadal trzymamy, ale cycle kontrolujemy przez enumerate(batch_schedule)
     asked = 0
     best_sel = float(initial_best_sel)
     ask_log = []
 
     Path(Path(model_path).parent).mkdir(parents=True, exist_ok=True)
 
-    # CHANGED: zamiast while asked < budget używamy jawnego harmonogramu batchy
     for cycle_idx, k in enumerate(batch_schedule, start=1):
         if k <= 0:
             continue
 
-        cycle = cycle_idx  # CHANGED: numer cyklu pochodzi z harmonogramu
+        cycle = cycle_idx
 
         cand_seed = int(args.seed + 10_000 * cycle + asked)
         mc_seed = int(args.seed + 20_000 * cycle + asked)
@@ -732,7 +692,7 @@ def run_active_loop(
 
             ask_log.append({
                 "cycle": cycle,
-                "planned_batch_size": int(k),  # CHANGED: zapisujemy planowany rozmiar batcha
+                "planned_batch_size": int(k),
                 "actual_batch_size": int(len(cycle_ask_ids)),
                 "ask_ids": cycle_ask_ids,
             })
@@ -832,14 +792,13 @@ def run_active_loop(
 
                 ask_log.append({
                     "cycle": cycle,
-                    "planned_batch_size": int(k),  # CHANGED: zapisujemy planowany rozmiar batcha
+                    "planned_batch_size": int(k),
                     "actual_batch_size": int(len(cycle_ask_ids)),
                     "ask_ids": cycle_ask_ids,
                 })
 
         val_loss = wrapper.train(active_ds, verbose=True)
 
-        # CHANGED: liczymy faktycznie zadane próbki, ale nie sterujemy już tym pętlą
         asked += len(cycle_ask_ids)
 
         _, val_y_pred = get_predictions(
@@ -867,7 +826,6 @@ def run_active_loop(
 
         labeled_cnt = sum(lbl is not None for _, lbl in active_ds.data)
 
-        # CHANGED: używamy cycle/n_cycles_planned z harmonogramu
         print(
             f"[cycle {cycle}/{n_cycles_planned}] "
             f"planned_batch={k} actual_batch={len(cycle_ask_ids)} "
@@ -899,7 +857,7 @@ def run_active_loop(
             "model": os.path.basename(os.path.normpath(model_path)),
 
             "init_size": int(resolved_init_size),
-            "batch": int(resolved_batch),  # nominalny batch do metadanych
+            "batch": int(resolved_batch),
             "budget": int(resolved_budget),
             "init_size_pct": float(resolved_init_size_pct),
             "budget_pct": float(resolved_budget_pct),
@@ -938,7 +896,7 @@ def run_active_loop(
                 "strategy": args.strategy,
 
                 "init_size": int(resolved_init_size),
-                "batch": int(resolved_batch),  # nominalny batch do metadanych
+                "batch": int(resolved_batch),
                 "budget": int(resolved_budget),
                 "init_size_pct": float(resolved_init_size_pct),
                 "budget_pct": float(resolved_budget_pct),
@@ -946,7 +904,6 @@ def run_active_loop(
                 "epc": int(args.epochs_per_cycle),
                 "final_labeled_target": int(final_labeled_target),
 
-                # CHANGED: zapisujemy harmonogram batchy do checkpointu
                 "batch_schedule": [int(x) for x in batch_schedule],
                 "n_cycles_planned": int(n_cycles_planned),
 
@@ -986,7 +943,7 @@ if __name__ == "__main__":
     if args.model_path is None:
         raise SystemExit("model_path must be provided either via CLI or config")
     
-    # In training mode, create checkpoint directory before any torch.save().
+    # In training mode, create checkpoint directory before any torch.save()
     if not args.eval_only:
         Path(args.model_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -1061,7 +1018,7 @@ if __name__ == "__main__":
             f"Strategy = {args.strategy}"
         )
 
-        # First training (before anotations)
+        # First training (cycle 0)
         print("\n🔸 Initial training on starting labeled set")
         start_loss = wrapper.train(active_ds, verbose=True)
 
@@ -1197,10 +1154,9 @@ if __name__ == "__main__":
     print(f"📦 MODEL NAME: {args.model_path}")
     wrapper.model.eval()
 
-    #val double check
     val_y_true_check, val_y_pred_check = get_predictions(wrapper.model, (X_val, y_val), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
     val_acc_check = accuracy_score(val_y_true_check, val_y_pred_check)
-    print(f"VAL ACC DOUBLE CHECK = {val_acc_check:.4f}")
+    print(f"📈 Validation accuracy check = {val_acc_check:.4f}")
 
     with torch.inference_mode():
         _, test_y_pred = get_predictions(wrapper.model, (X_test, y_test), DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})

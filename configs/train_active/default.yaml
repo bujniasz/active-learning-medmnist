@@ -7,7 +7,7 @@
 # This config runs ONE active learning experiment.
 # Use single values only, not lists.
 # For multiple datasets / seeds / strategies / budgets use:
-#   src/run.py with configs/experiment_launcher/active/*.yaml
+#   python3 -m src.run_experiments -c configs/run_experiments/active/*.yaml
 # =============================================================================
 
 # === Data ===

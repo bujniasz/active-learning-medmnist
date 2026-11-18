@@ -50,7 +50,7 @@ overwrite_results: false
 #   models/my-experiment/new/bloodmnist/...
 #   models/my-experiment/new/pneumoniamnist/...
 #
-results_csv: results/run-woplots/2705-pt2.csv
+results_csv: results/active-sweep.csv
 
 # =============================================================================
 # Experiment grid
