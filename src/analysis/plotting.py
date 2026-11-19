@@ -621,7 +621,7 @@ def plot_pairwise_deltas(pw: pd.DataFrame, out_dir: Path, pretty_name: str) -> N
             plt.close(fig_hist)
 
             # =========================
-            # 2) BILANS PORÓWNAŃ
+            # 2) COMPARISON SUMMARY
             # =========================
             fig_bar, ax_bar = plt.subplots(figsize=(5.6, 4.8))
 

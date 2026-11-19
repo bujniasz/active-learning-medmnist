@@ -15,10 +15,10 @@ data_dir: data/pneumoniamnist
 
 # === Output ===
 # Path where the best model checkpoint will be saved.
-model_path: models/thisdoesnotexistpt2/test.pth
+model_path: models/pneumoniamnist-supervised.pth
 
 # Path to CSV file where validation/test metrics will be appended.
-results_path: results/thisdoesnotexistpt2/test.csv
+results_path: results/pneumoniamnist-supervised.csv
 
 # === Reproducibility ===
 # Random seed used for NumPy, Python random and PyTorch.

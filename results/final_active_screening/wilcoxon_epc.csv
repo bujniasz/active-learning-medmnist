@@ -1,0 +1,4 @@
+param,comparison,v1,v2,metric,n_pairs,n_nonzero,median_delta,mean_delta,wilcoxon_stat,p_value,significant_0.05,significant_0.01,direction
+epc,1_vs_5,1.0,5.0,aulc_norm,360,360,-0.0483,-0.0517,0.0,<1e-16,True,True,v2_better
+epc,1_vs_5,1.0,5.0,last-iteration-model,360,360,-0.0155,-0.0207,11234.0,<1e-16,True,True,v2_better
+epc,1_vs_5,1.0,5.0,final-test-model,360,360,-0.0121,-0.0125,3404.5,<1e-16,True,True,v2_better

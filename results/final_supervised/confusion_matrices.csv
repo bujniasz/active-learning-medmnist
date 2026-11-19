@@ -1,0 +1,4 @@
+dataset,tp,fp,tn,fn,support
+octmnist,3355,111,1139,395,5000
+pathmnist,9125,2322,16208,840,28495
+pneumoniamnist,1936,491,679,14,3120

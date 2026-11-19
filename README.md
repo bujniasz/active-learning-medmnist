@@ -43,7 +43,8 @@ data/<dataset>/
   test_labels.npy
 ```
 
-Data download and preparation details are described in `data/readme.md`.
+Data download and preparation details are described in
+[`data/readme.md`](data/readme.md).
 
 ## Model
 
@@ -173,13 +174,13 @@ python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analy
 
 YAML configuration files for the main scripts. Each main workflow has its own `default.yaml`, which serves both as a runnable example and as parameter documentation.
 
-See: `configs/readme.md`.
+See [`configs/readme.md`](configs/readme.md).
 
 ### `data/`
 
 Input data in `.npy` format, split into `train`, `val` and `test`. The repository may contain only part of the data, while the remaining datasets should be downloaded according to the instructions.
 
-See: `data/readme.md`.
+See [`data/readme.md`](data/readme.md).
 
 ### `logs/`
 
@@ -187,25 +188,25 @@ Asklogs generated during Active Learning. `.asklog.json` files store which sampl
 
 The repository keeps a representative asklog subset for `final_active_best/octmnist`; the remaining logs are treated as generated artifacts.
 
-See: `logs/readme.md`.
+See [`logs/readme.md`](logs/readme.md).
 
 ### `models/`
 
 `.pth` model checkpoints saved during training. Models are large, so they are ignored by default. The repository includes one representative example checkpoint.
 
-See: `models/readme.md`.
+See [`models/readme.md`](models/readme.md).
 
 ### `results/`
 
 CSV files with experiment results and directories with plots and tables generated from those CSV files. Final files matching `results/final_*.csv` are versioned, while other generated artifacts are ignored by default.
 
-See: `results/readme.md`.
+See [`results/readme.md`](results/readme.md).
 
 ### `src/`
 
 Project source code. It contains training scripts, the experiment launcher, result analysis, plotting utilities and helper functions for data loading, label mapping and model handling.
 
-See: `src/readme.md`.
+See [`src/readme.md`](src/readme.md).
 
 ## Main Source Files
 

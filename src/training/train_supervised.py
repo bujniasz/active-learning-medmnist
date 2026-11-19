@@ -309,7 +309,7 @@ if __name__ == "__main__":
         val_y_true_check, val_y_pred_check = get_predictions(model, val_loader, DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
         val_acc_check = accuracy_score(val_y_true_check, val_y_pred_check)
         test_y_true, test_y_pred = get_predictions(model, test_loader, DEVICE, forward_kwargs={"backbone_mode": "eval", "enable_dropout": False})
-    print(f"📈 Validation check: val_acc = {val_acc_check:.4f}")
+    print(f"📈 Validation accuracy check = {val_acc_check:.4f}")
 
     test_proba = None
     if get_num_classes(model) == 2:

@@ -1,0 +1,4 @@
+dataset,n_runs,mean_acc,std_acc,mean_f1_macro,std_f1_macro,mean_auc,std_auc,mean_ap,std_ap,mean_test_mean,std_test_mean
+octmnist,5,0.8988,0.0124,0.8742,0.0118,0.9642,0.0039,0.9888,0.0011,0.9315,0.0054
+pathmnist,5,0.8891,0.0212,0.8818,0.0216,0.9563,0.0122,0.9219,0.0255,0.9123,0.0192
+pneumoniamnist,5,0.8381,0.0251,0.8057,0.0358,0.9521,0.0089,0.9624,0.0098,0.8896,0.0187

@@ -55,7 +55,7 @@ data_dirs:
 # Checkpoints:
 #   models/final_supervised/results/octmnist/...
 #   models/final_supervised/results/pathmnist/...
-results_csv: results/run-super/run-super.csv
+results_csv: results/supervised-sweep.csv
 
 
 # === Reproducibility ===

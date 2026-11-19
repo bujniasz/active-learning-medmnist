@@ -1,0 +1,7 @@
+strategy,position_octmnist,position_pathmnist,position_pneumoniamnist,mean_position,n_datasets,overall_position
+entropy,2,1,3,2.0,3,1
+entropy_diverse,1,6,3,3.3333,3,2
+mc_bald,3,2,6,3.6667,3,3
+mc_bald_diverse,4,2,5,3.6667,3,3
+egl_fc,5,4,2,3.6667,3,3
+random,6,5,1,4.0,3,6
