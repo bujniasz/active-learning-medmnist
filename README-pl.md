@@ -1,35 +1,37 @@
-# Active Learning Medmnist
+# Active Learning MedMNIST
 
-Repozytorium zawiera kod, konfiguracje i wybrane artefakty eksperymentów do pracy badawczej nad zastosowaniem **Active Learning** w klasyfikacji obrazów medycznych ze zbiorów **MedMNIST2D**.
+Repozytorium zawiera kod źródłowy, pliki konfiguracyjne oraz wyniki przeprowadzonych badań nad zastosowaniem **aktywnego uczenia** w klasyfikacji obrazów medycznych z kolekcji **MedMNIST2D**.
 
-Celem projektu jest porównanie klasycznego uczenia nadzorowanego z podejściem aktywnego uczenia, w którym model nie korzysta od razu z pełnego zbioru etykiet, tylko iteracyjnie wybiera kolejne próbki do oznaczenia. Eksperymenty sprawdzają, czy odpowiedni dobór próbek pozwala osiągnąć wyniki zbliżone do pełnego treningu przy mniejszym budżecie etykiet.
+Celem projektu jest porównanie aktywnego uczenia z klasycznym uczeniem nadzorowanym. W aktywnym uczeniu model nie korzysta od początku z całego oznaczonego zbioru treningowego, lecz stopniowo wybiera próbki, które mają zostać oznaczone i włączone do dalszego treningu. Eksperymenty służą sprawdzeniu, czy taki sposób doboru danych pozwala osiągnąć jakość klasyfikacji zbliżoną do uczenia na pełnym zbiorze przy wykorzystaniu mniejszej liczby etykiet.
 
-## Zakres Projektu
+## Zakres projektu
 
 Projekt obejmuje:
 
 - przygotowanie danych MedMNIST2D w formacie `.npy`;
-- mapowanie wybranych zbiorów do klasyfikacji binarnej;
-- trening modelu ResNet18 w trybie supervised;
-- trening Active Learning z różnymi strategiami wyboru próbek;
-- automatyczne uruchamianie większych siatek eksperymentów;
-- zapis wyników do CSV;
-- zapis checkpointów modeli;
-- zapis asklogów, czyli list próbek wybranych w cyklach Active Learning;
-- analizę wyników klasycznego uczenia nadzorowanego;
-- analizę wyników screeningu oraz finalnego porównania strategii Active Learning;
-- analizę optymalizacji progu decyzyjnego.
+- przekształcenie wybranych zbiorów w zadania klasyfikacji binarnej;
+- trening modelu ResNet-18 w schemacie uczenia nadzorowanego;
+- trening z wykorzystaniem aktywnego uczenia i różnych strategii wyboru próbek;
+- automatyczne uruchamianie serii eksperymentów dla wielu konfiguracji;
+- zapisywanie wyników w plikach CSV;
+- zapisywanie stanów wytrenowanych modeli;
+- zapisywanie logów z wyboru próbek w kolejnych cyklach aktywnego uczenia;
+- analizę wyników uczenia nadzorowanego;
+- wstępny dobór hiperparametrów aktywnego uczenia oraz końcowe porównanie strategii;
+- analizę wpływu optymalizacji progu decyzyjnego.
 
 ## Dane
 
-Projekt korzysta z wybranych zbiorów MedMNIST2D:
+W eksperymentach wykorzystywane są wybrane zbiory z kolekcji MedMNIST2D:
 
-- `pneumoniamnist` - binarna klasyfikacja zapalenia płuc;
-- `bloodmnist` - używany głównie do screeningu hiperparametrów Active Learning;
-- `octmnist` - klasy sprowadzone do problemu binarnego;
-- `pathmnist` - klasy sprowadzone do problemu binarnego, z odrzuceniem wybranych klas nieużywanych w eksperymencie.
+- `bloodmnist` - obrazy mikroskopowe komórek krwi;
+- `octmnist` - obrazy OCT siatkówki oka;
+- `pathmnist` - obrazy histopatologiczne tkanki jelita grubego;
+- `pneumoniamnist` - obrazy RTG klatki piersiowej.
 
-Dane są oczekiwane w strukturze:
+Zbiór BloodMNIST wykorzystano do wstępnego doboru hiperparametrów aktywnego uczenia. Pozostałe trzy zbiory posłużyły do końcowej oceny i porównania klasyfikatorów trenowanych w schemacie uczenia nadzorowanego i aktywnego.
+
+Każdy przygotowany zbiór powinien mieć następującą strukturę:
 
 ```text
 data/<dataset>/
@@ -41,49 +43,49 @@ data/<dataset>/
   test_labels.npy
 ```
 
-Szczegóły pobierania i przygotowania danych są opisane w
+Sposób pobierania i przygotowania danych opisano w pliku
 [`data/readme.md`](data/readme.md).
 
 ## Model
 
-W eksperymentach używany jest model oparty o `ResNet18` z `torchvision`.
+W eksperymentach stosowany jest model oparty na architekturze ResNet-18 dostępnej w bibliotece `torchvision`.
 
-Model korzysta z wag pretrenowanych na ImageNet. Dla obrazów RGB pierwsza warstwa konwolucyjna pozostaje zgodna z modelem pretrenowanym. Dla obrazów jednokanałowych pierwsza warstwa jest dostosowywana do liczby kanałów wejściowych i inicjalizowana od nowa, natomiast dalsze bloki ResNet18 nadal korzystają z wag pretrenowanych.
+Model korzysta z wag wytrenowanych wstępnie na zbiorze ImageNet. W przypadku obrazów RGB pierwsza warstwa konwolucyjna pozostaje zgodna z modelem źródłowym. Dla obrazów jednokanałowych warstwa ta jest dostosowywana do liczby kanałów wejściowych i inicjalizowana od nowa, natomiast pozostałe bloki ResNet-18 nadal korzystają z wag wytrenowanych na ImageNet.
 
-Ostatnia warstwa klasyfikacyjna jest zawsze wymieniana tak, aby odpowiadała liczbie klas w danym zadaniu. Przed klasyfikatorem dodany jest dropout, wykorzystywany między innymi w strategiach MC Dropout.
+Końcowa warstwa klasyfikacyjna jest zastępowana warstwą odpowiadającą liczbie klas w danym zadaniu. Bezpośrednio przed nią znajduje się warstwa dropout, wykorzystywana między innymi przez strategie oparte na MC Dropout.
 
-## Strategie Active Learning
+## Strategie aktywnego uczenia
 
-Projekt wspiera następujące strategie wyboru próbek:
+Projekt obsługuje następujące strategie wyboru próbek:
 
-- `random` - losowy wybór próbek, traktowany jako pasywny baseline;
-- `least_confident` - wybiera próbki, dla których najwyższe prawdopodobieństwo klasy jest najniższe;
-- `margin` - wybiera próbki z najmniejszą różnicą między dwiema najbardziej prawdopodobnymi klasami;
-- `entropy` - wybiera próbki o najwyższej entropii predykcji;
-- `mc_entropy` - wariant entropii oparty o MC Dropout, czyli wiele stochastycznych predykcji modelu;
-- `mc_bald` - strategia BALD oparta o MC Dropout, mierząca niepewność epistemiczną modelu;
-- `entropy_diverse` - najpierw wybiera próbki niepewne, a potem dodaje selekcję różnorodną w przestrzeni embeddingów;
-- `mc_entropy_diverse` - połączenie MC Entropy z doborem różnorodnego batcha;
-- `mc_bald_diverse` - połączenie BALD z doborem różnorodnego batcha;
-- `egl_fc` - Expected Gradient Length liczony dla ostatniej warstwy liniowej.
+- `random` - losowy wybór próbek, pełniący funkcję punktu odniesienia;
+- `least_confident` - wybór próbek, dla których najwyższe przewidywane prawdopodobieństwo klasy jest najmniejsze;
+- `margin` - wybór próbek z najmniejszą różnicą między dwoma najwyższymi prawdopodobieństwami klas;
+- `entropy` - wybór próbek o największej entropii predykcji;
+- `mc_entropy` - wariant oparty na entropii obliczanej z wielu stochastycznych predykcji uzyskanych za pomocą MC Dropout;
+- `mc_bald` - strategia BALD wykorzystująca MC Dropout do oceny niepewności epistemicznej modelu;
+- `entropy_diverse` - połączenie wyboru próbek niepewnych z doborem uwzględniającym ich zróżnicowanie w przestrzeni reprezentacji cech;
+- `mc_entropy_diverse` - połączenie MC Entropy z doborem zróżnicowanej partii próbek;
+- `mc_bald_diverse` - połączenie BALD z doborem zróżnicowanej partii próbek;
+- `egl_fc` - strategia Expected Gradient Length obliczana dla ostatniej warstwy w pełni połączonej.
 
-Nie wszystkie strategie muszą być używane w każdym finalnym eksperymencie. Konkretne zestawy strategii są definiowane w plikach YAML w `configs/`.
+Zestaw strategii używanych w konkretnym eksperymencie określa się w odpowiednim pliku YAML w katalogu `configs/`.
 
 ## Metryki
 
-Wyniki zapisywane są głównie przy użyciu:
+Wyniki eksperymentów opisywane są przede wszystkim za pomocą następujących metryk:
 
-- `acc` - accuracy;
-- `f1_macro` - macro F1;
-- `auc` - ROC AUC dla klasyfikacji binarnej;
-- `ap` - average precision;
-- `val_mean` - średnia z dostępnych metryk walidacyjnych.
+- `acc` - dokładność klasyfikacji;
+- `f1_macro` - miara F1 obliczana w wariancie makro;
+- `auc` - pole pod krzywą ROC;
+- `ap` - średnia precyzja;
+- `val_mean` - średnia z metryk obliczonych na zbiorze walidacyjnym.
 
-Dla eksperymentów Active Learning zapisywana jest także liczba aktualnie oznaczonych próbek (`labeled_count`) oraz parametry budżetu etykietowania.
+Dla aktywnego uczenia zapisywane są ponadto liczba aktualnie oznaczonych próbek (`labeled_count`) oraz parametry opisujące budżet anotacji.
 
 ## Instalacja
 
-Zalecane jest uruchamianie projektu w wirtualnym środowisku.
+Projekt najlepiej uruchamiać w wirtualnym środowisku Pythona:
 
 ```bash
 python3 -m venv venv
@@ -91,137 +93,138 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Po aktywacji środowiska wszystkie skrypty można uruchamiać jako moduły Pythona z głównego katalogu repozytorium.
+Po aktywowaniu środowiska wszystkie skrypty można uruchamiać jako moduły Pythona z głównego katalogu repozytorium.
 
-## Przykładowe Uruchomienia
+## Przykładowe polecenia
 
-Pojedynczy eksperyment Active Learning:
+Pojedynczy eksperyment aktywnego uczenia:
 
 ```bash
 python3 -m src.training.train_active -c configs/train_active/default.yaml
 ```
 
-Pojedynczy trening supervised:
+Pojedynczy trening nadzorowany:
 
 ```bash
 python3 -m src.training.train_supervised -c configs/train_supervised/default.yaml
 ```
 
-Siatka eksperymentów Active Learning:
+Seria eksperymentów aktywnego uczenia:
 
 ```bash
 python3 -m src.run_experiments -c configs/run_experiments/active/default.yaml
 ```
 
-Siatka eksperymentów supervised:
+Seria eksperymentów uczenia nadzorowanego:
 
 ```bash
 python3 -m src.run_experiments -c configs/run_experiments/supervised/default.yaml
 ```
 
-Analiza wyników screeningu Active Learning:
+Analiza wyników doboru hiperparametrów aktywnego uczenia:
 
 ```bash
 python3 -m src.analysis.analyze_active_screening -c configs/analysis/analyze_active_screening/default.yaml
 ```
 
-Analiza wyników supervised:
+Analiza wyników uczenia nadzorowanego:
 
 ```bash
 python3 -m src.analysis.analyze_supervised -c configs/analysis/analyze_supervised/default.yaml
 ```
 
-Analiza finalnego porównania strategii Active Learning:
+Analiza końcowego porównania strategii aktywnego uczenia:
 
 ```bash
 python3 -m src.analysis.analyze_active_strategies -c configs/analysis/analyze_active_strategies/default.yaml
 ```
 
-Analiza optymalizacji progu decyzyjnego:
+Analiza wpływu progu decyzyjnego:
 
 ```bash
 python3 -m src.analysis.analyze_threshold_optimization -c configs/analysis/analyze_threshold_optimization/default.yaml
 ```
 
-## Typowy Przebieg Pracy
+## Typowy przebieg eksperymentu
 
 1. Aktywuj środowisko `venv`.
-2. Zainstaluj zależności z `requirements.txt`.
-3. Upewnij się, że dane znajdują się w `data/<dataset>/`.
-4. Wybierz lub skopiuj odpowiedni plik YAML z `configs/`.
-5. Uruchom pojedynczy trening albo sweep przez `src.run_experiments`.
-6. Sprawdź wyniki w `results/`.
-7. Dla Active Learning sprawdź dodatkowo checkpointy w `models/` i asklogi w `logs/`.
-8. W razie potrzeby uruchom analizę wyników supervised, screeningu, finalnego porównania strategii lub optymalizacji progu.
+2. Zainstaluj zależności wymienione w pliku `requirements.txt`.
+3. Upewnij się, że dane znajdują się w katalogu `data/<dataset>/`.
+4. Wybierz odpowiedni plik konfiguracyjny YAML z katalogu `configs/` albo utwórz jego kopię.
+5. Uruchom pojedynczy trening lub serię eksperymentów za pomocą modułu `src.run_experiments`.
+6. Sprawdź zapisane wyniki w katalogu `results/`.
+7. W przypadku aktywnego uczenia sprawdź również stany modeli w katalogu `models/` i logi wyboru próbek w katalogu `logs/`.
+8. Uruchom odpowiedni skrypt analityczny, aby opracować wyniki treningu nadzorowanego, doboru hiperparametrów, porównania strategii lub optymalizacji progu decyzyjnego.
 
-## Struktura Repozytorium
+## Struktura repozytorium
 
 ```text
-  configs/
-  data/
-  logs/
-  models/
-  results/
-  src/
-  requirements.txt
-  README.md
+configs/
+data/
+logs/
+models/
+results/
+src/
+requirements.txt
+README.md
+README-pl.md
 ```
 
 ### `configs/`
 
-Pliki konfiguracyjne YAML dla głównych skryptów. Każdy główny workflow ma swój `default.yaml`, który służy zarówno jako przykład uruchomienia, jak i dokumentacja parametrów.
+Pliki YAML określające parametry uruchamiania skryptów. Dla każdego głównego rodzaju eksperymentu dostępny jest plik `default.yaml`, który pełni funkcję przykładowej konfiguracji i dokumentacji dostępnych ustawień.
 
-Więcej: [`configs/readme.md`](configs/readme.md).
+Więcej informacji: [`configs/readme.md`](configs/readme.md).
 
 ### `data/`
 
-Dane wejściowe w formacie `.npy`, podzielone na `train`, `val` i `test`. W repozytorium może znajdować się tylko część danych, a pozostałe zbiory należy pobrać zgodnie z instrukcją.
+Dane wejściowe w formacie `.npy`, podzielone na zbiory treningowy (`train`), walidacyjny (`val`) i testowy (`test`). Repozytorium może zawierać tylko część danych. Pozostałe zbiory należy pobrać zgodnie z dołączoną instrukcją.
 
-Więcej: [`data/readme.md`](data/readme.md).
+Więcej informacji: [`data/readme.md`](data/readme.md).
 
 ### `logs/`
 
-Asklogi generowane podczas Active Learning. Pliki `.asklog.json` zapisują, które próbki zostały wybrane do oznaczenia w kolejnych cyklach.
+Dzienniki wyboru próbek tworzone podczas aktywnego uczenia. Pliki `.asklog.json` zawierają identyfikatory próbek wybranych do oznaczenia w kolejnych cyklach.
 
-W repozytorium trzymany jest reprezentatywny przykład asklogów dla `final_active_best/octmnist`, a pozostałe logi są traktowane jako artefakty generowane.
+W repozytorium znajduje się reprezentatywny przykład dziennika dla eksperymentu `final_active_best/octmnist`. Pozostałe dzienniki są generowane podczas uruchamiania eksperymentów i domyślnie nie podlegają wersjonowaniu.
 
-Więcej: [`logs/readme.md`](logs/readme.md).
+Więcej informacji: [`logs/readme.md`](logs/readme.md).
 
 ### `models/`
 
-Checkpointy modeli `.pth` zapisywane podczas treningu. Modele są duże, dlatego domyślnie nie są wersjonowane. W repozytorium znajduje się jeden reprezentatywny checkpoint przykładowy.
+Stany modeli zapisane w plikach `.pth`. Ze względu na ich rozmiar większość z nich nie podlega wersjonowaniu. W repozytorium pozostawiono jeden przykładowy plik tego rodzaju.
 
-Więcej: [`models/readme.md`](models/readme.md).
+Więcej informacji: [`models/readme.md`](models/readme.md).
 
 ### `results/`
 
-CSV z wynikami eksperymentów oraz foldery z wykresami i tabelami generowanymi na podstawie tych CSV. Finalne pliki `results/final_*.csv` są wersjonowane, a pozostałe artefakty są domyślnie ignorowane.
+Pliki CSV z wynikami eksperymentów oraz katalogi zawierające utworzone na ich podstawie zestawienia, tabele i wykresy. Końcowe pliki `results/final_*.csv` są wersjonowane, natomiast pozostałe pliki wynikowe są domyślnie pomijane.
 
-Więcej: [`results/readme.md`](results/readme.md).
+Więcej informacji: [`results/readme.md`](results/readme.md).
 
 ### `src/`
 
-Kod źródłowy projektu. Zawiera skrypty treningowe, launcher eksperymentów, analizę wyników, wykresy oraz funkcje pomocnicze do ładowania danych, mapowania etykiet i obsługi modelu.
+Kod źródłowy projektu. Obejmuje skrypty treningowe i analityczne, mechanizm uruchamiania serii eksperymentów, funkcje tworzące wykresy oraz narzędzia pomocnicze odpowiedzialne za wczytywanie danych, mapowanie etykiet i obsługę modelu.
 
-Więcej: [`src/readme.md`](src/readme.md).
+Więcej informacji: [`src/readme.md`](src/readme.md).
 
-## Najważniejsze Pliki Źródłowe
+## Najważniejsze pliki źródłowe
 
-- `src/training/train_supervised.py` - trening i ewaluacja modelu supervised.
-- `src/training/train_active.py` - pojedynczy eksperyment Active Learning.
-- `src/run_experiments.py` - uruchamianie większych siatek eksperymentów.
-- `src/analysis/analyze_supervised.py` - analiza wyników supervised.
-- `src/analysis/analyze_active_screening.py` - analiza screeningu Active Learning.
-- `src/analysis/analyze_active_strategies.py` - analiza finalnego porównania strategii Active Learning.
-- `src/analysis/analyze_threshold_optimization.py` - analiza optymalizacji progu decyzyjnego.
-- `src/analysis/plotting.py` - funkcje do generowania wykresów.
-- `src/utils/load_data.py` - ładowanie i przygotowanie danych.
-- `src/utils/labels_mapping.py` - mapowanie etykiet do zadań binarnych.
-- `src/utils/shared.py` - model ResNet18, predykcje, CSV, metryki i wspólne helpery.
+- `src/training/train_supervised.py` - trening i ewaluacja modelu w schemacie uczenia nadzorowanego;
+- `src/training/train_active.py` - przeprowadzenie pojedynczego eksperymentu aktywnego uczenia;
+- `src/run_experiments.py` - uruchamianie serii eksperymentów dla wielu konfiguracji;
+- `src/analysis/analyze_supervised.py` - analiza wyników uczenia nadzorowanego;
+- `src/analysis/analyze_active_screening.py` - analiza wyników doboru hiperparametrów aktywnego uczenia;
+- `src/analysis/analyze_active_strategies.py` - analiza końcowego porównania strategii aktywnego uczenia;
+- `src/analysis/analyze_threshold_optimization.py` - analiza wpływu optymalizacji progu decyzyjnego;
+- `src/analysis/plotting.py` - funkcje tworzące wykresy;
+- `src/utils/load_data.py` - wczytywanie i przygotowanie danych;
+- `src/utils/labels_mapping.py` - przekształcanie etykiet na potrzeby klasyfikacji binarnej;
+- `src/utils/shared.py` - wspólne elementy implementacji, w tym model ResNet-18, obliczanie predykcji i metryk oraz zapis wyników w plikach CSV.
 
-## Wyniki Finalne
+## Wyniki końcowe
 
-W repozytorium znajdują się trzy główne pliki wynikowe:
+W repozytorium znajdują się trzy podstawowe pliki zawierające wyniki eksperymentów:
 
 ```text
 results/final_supervised.csv
@@ -229,19 +232,16 @@ results/final_active_screening.csv
 results/final_active_best.csv
 ```
 
-Ich rola:
+Poszczególne pliki zawierają:
 
-- `final_supervised.csv` - baseline supervised dla finalnych datasetów;
-- `final_active_screening.csv` - screening parametrów Active Learning na `bloodmnist`;
-- `final_active_best.csv` - finalne porównanie strategii Active Learning na wybranym zestawie parametrów.
+- `final_supervised.csv` - wyniki uczenia nadzorowanego stanowiące punkt odniesienia dla dalszych porównań;
+- `final_active_screening.csv` - wyniki wstępnego doboru hiperparametrów aktywnego uczenia na zbiorze `bloodmnist`;
+- `final_active_best.csv` - wyniki końcowego porównania strategii aktywnego uczenia dla wybranej konfiguracji.
 
-Dodatkowe skrypty analityczne mogą generować pochodne podsumowania i wykresy,
-na przykład podsumowanie metryk testowych supervised, podsumowania screeningu,
-rankingi strategii, podsumowania optymalizacji progu decyzyjnego oraz
-zagregowane macierze pomyłek.
+Na podstawie tych plików skrypty analityczne tworzą między innymi podsumowania metryk testowych, zestawienia dotyczące doboru hiperparametrów, rankingi strategii, analizę wpływu progu decyzyjnego oraz zagregowane macierze pomyłek.
 
-## Uwagi Reprodukcyjne
+## Odtwarzalność eksperymentów
 
-Eksperymenty używają ustalonych seedów, a skrypty ustawiają ziarna losowości dla Pythona, NumPy i PyTorch. Mimo tego pełna bitowa reprodukowalność może zależeć od wersji bibliotek, urządzenia, sterowników CUDA i konfiguracji środowiska.
+Skrypty ustawiają ziarna generatorów liczb pseudolosowych używanych przez Pythona, NumPy i PyTorch. Nie gwarantuje to jednak uzyskania identycznych wyników w każdym środowisku. Na rezultat mogą wpływać między innymi wersje bibliotek, użyte urządzenie obliczeniowe, sterowniki CUDA oraz pozostałe elementy konfiguracji systemu.
 
-Najważniejsze parametry eksperymentów są zapisane w plikach YAML oraz w wynikowych CSV.
+Najważniejsze parametry eksperymentów zapisano w plikach YAML oraz w wynikowych plikach CSV.
