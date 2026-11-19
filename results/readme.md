@@ -197,6 +197,4 @@ python3 -m src.analysis.analyze_threshold_optimization \
 ## Versioned Results
 
 The three final experiment CSV files and the four derived `final_*` analysis
-directories are the canonical result artifacts used in the project. Other
-files under `results/` are intermediate, exploratory or older local outputs and
-are ignored by Git by default.
+directories are the canonical result artifacts used in the project.

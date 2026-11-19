@@ -26,10 +26,12 @@ The project includes:
 
 The project uses selected MedMNIST2D datasets:
 
-- `pneumoniamnist` - binary pneumonia classification;
-- `bloodmnist` - used mainly for Active Learning hyperparameter screening;
-- `octmnist` - classes mapped to a binary classification task;
-- `pathmnist` - classes mapped to a binary classification task, with selected unused classes discarded.
+- `bloodmnist` - microscopic images of peripheral blood cells;
+- `octmnist` - retinal optical coherence tomography (OCT) images;
+- `pathmnist` - histopathological images of colorectal tissue;
+- `pneumoniamnist` - chest X-ray images.
+
+BloodMNIST was used for preliminary Active Learning hyperparameter screening. The remaining three datasets were used for the final evaluation and comparison of classifiers trained with supervised and active learning.
 
 Data is expected in the following structure:
 
@@ -77,7 +79,7 @@ Results are mainly logged using:
 
 - `acc` - accuracy;
 - `f1_macro` - macro F1;
-- `auc` - ROC AUC for binary classification;
+- `auc` - ROC AUC;
 - `ap` - average precision;
 - `val_mean` - average of the available validation metrics.
 
