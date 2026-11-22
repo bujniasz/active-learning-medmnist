@@ -1,4 +1,4 @@
-#LIBACT DEPENDENCIES https://github.com/ntucllab/libact/blob/master/requirements.txt
+#LIBACT DEPENDENCIES https://github.com/ntucllab/libact/blob/40d44b73a9f9cb99a08c7e5e8e17371dddf1599f/requirements.txt
 setuptools<60.0.0
 numpy<=2.2.2
 scipy<=1.15.1
@@ -8,8 +8,8 @@ Cython<=3.0.11
 joblib<=1.4.2
 
 #MAIN PACKAGES
-git+https://github.com/ntucllab/libact.git
-torch
-torchvision
-medmnist
-pyyaml
+git+https://github.com/ntucllab/libact.git@40d44b73a9f9cb99a08c7e5e8e17371dddf1599f
+torch==2.7.1
+torchvision==0.22.1
+medmnist==3.0.2
+pyyaml==6.0.3

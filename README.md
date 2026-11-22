@@ -1,4 +1,4 @@
-# Active Learning Medmnist
+# Active Learning MedMNIST
 
 Polish version available: [README-pl.md](README-pl.md)
 
