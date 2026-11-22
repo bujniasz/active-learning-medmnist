@@ -12,4 +12,4 @@ git+https://github.com/ntucllab/libact.git@40d44b73a9f9cb99a08c7e5e8e17371dddf15
 torch==2.7.1
 torchvision==0.22.1
 medmnist==3.0.2
-PyYAML==6.0.3
+pyyaml==6.0.3
