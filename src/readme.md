@@ -62,6 +62,8 @@ Runs one Active Learning experiment.
 
 The script prepares an initial labeled subset, keeps the remaining samples unlabeled, selects new samples in query cycles and retrains the model after each cycle. It supports multiple query strategies, including random sampling, entropy, margin-based uncertainty, MC Dropout variants, BALD-style scoring, diversity-aware variants and EGL for the final fully connected layer.
 
+It can also run in `--eval-only` mode to load an existing Active Learning checkpoint and evaluate it without repeating the training and query cycles.
+
 It saves:
 
 - the best checkpoint according to the selected validation metric;
